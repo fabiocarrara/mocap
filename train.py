@@ -1,5 +1,7 @@
 import argparse
 import glob
+
+import pandas as pd
 import re
 
 import os
@@ -8,9 +10,9 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn.utils import clip_grad_norm
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.utils.data import DataLoader
-from torch.utils.data.sampler import WeightedRandomSampler
+from torch.utils.data.sampler import WeightedRandomSampler, RandomSampler
 from tqdm import trange, tqdm
 
 from dataset import MotionDataset
@@ -34,15 +36,19 @@ def accuracy(output, target, topk=(1, 5)):
     return res
 
 
-def eval(loader, model, args):
+def evaluate(loader, model, args):
     model.eval()
 
     avg_loss = 0.0
     avg_acc1 = 0.0
     avg_acc5 = 0.0
 
+    action_correct = torch.zeros(len(loader.dataset.actions))
+    action_count = torch.zeros(len(loader.dataset.actions))
+
     progress_bar = tqdm(loader, disable=args.no_progress)
     for i, (x, y) in enumerate(progress_bar):
+        _y = y
         if args.cuda:
             x = x.cuda()
             y = y.cuda(async=True)
@@ -55,6 +61,8 @@ def eval(loader, model, args):
         avg_loss += loss.data[0]
 
         acc1, acc5 = accuracy(y_hat, y, topk=(1, 5))
+        action_correct[_y] += (acc1 / 100.0) + (acc5 / 100.0)
+        action_count[_y] += 1
 
         avg_acc1 += acc1
         avg_acc5 += acc5
@@ -68,7 +76,9 @@ def eval(loader, model, args):
             'acc5': '{:5.2f}%'.format(run_acc5),
         })
 
-    return run_loss, run_acc1, run_acc5
+    accuracy_balance = torch.log1p(2 * action_count - action_correct)
+
+    return (run_loss, run_acc1, run_acc5), accuracy_balance
 
 
 def train(loader, model, optimizer, epoch, args):
@@ -79,6 +89,7 @@ def train(loader, model, optimizer, epoch, args):
     n_samples = len(loader.dataset)
     progress_bar = tqdm(loader, disable=args.no_progress)
     for i, (x, y) in enumerate(progress_bar):
+        _y = y
         if args.cuda:
             x = x.cuda()
             y = y.cuda(async=True)
@@ -86,12 +97,19 @@ def train(loader, model, optimizer, epoch, args):
         y = Variable(y, requires_grad=False)
 
         y_hat = model(x)
+        if args.label_smoothing:
+            one_hot = torch.zeros_like(y_hat)
+            one_hot[0, _y[0]] = 1
+            soft_targets = one_hot * (1 - args.label_smoothing) + \
+                           (1 - one_hot) * args.label_smoothing / (y_hat.shape[1] - 1)
+            loss = torch.sum(- soft_targets * F.log_softmax(y_hat, dim=1), 1).mean()
+        else:
+            loss = F.cross_entropy(y_hat, y)
 
-        loss = F.cross_entropy(y_hat, y)
         loss.backward()
         avg_loss += loss.data[0]
 
-        if (i + 1) % args.accumulate == 0:
+        if (i + 1) % args.accumulate == 0 or (i + 1) == n_samples:
             if args.clip_norm:
                 clip_grad_norm(model.parameters(), args.clip_norm)
 
@@ -119,26 +137,30 @@ def save_checkpoint(state, is_best, filename):
 
 
 def get_last_checkpoint(run_dir):
-
     def get_epoch(fname):
         epoch_regex = r'.*epoch_(\d+).pth'
         matches = re.match(epoch_regex, fname)
         return int(matches.groups()[0]) if matches else None
 
-    checkpoints = [(get_epoch(i), i) for i in glob.glob('epoch_*.pth')]
+    checkpoints = glob.glob(os.path.join(run_dir, 'epoch_*.pth'))
+    checkpoints = [(get_epoch(i), i) for i in checkpoints]
     last_checkpoint = max(checkpoints)[1]
     return last_checkpoint
 
 
 def main(args):
     # Use CUDA?
-    args.cuda = torch.cuda.is_available() and not args.no_cuda
+    args.cuda = args.cuda and torch.cuda.is_available()
+
+    torch.manual_seed(args.seed)
+    if args.cuda:
+        torch.cuda.manual_seed(args.seed)
 
     # Load datasets and build data loaders
-    val_dataset = MotionDataset(args.val_data)
+    val_dataset = MotionDataset(args.val_data, fps=args.fps)
     val_actions = val_dataset.actions.keys()
 
-    train_dataset = MotionDataset(args.train_data, keep_actions=val_actions)
+    train_dataset = MotionDataset(args.train_data, keep_actions=val_actions, fps=args.fps, offset=args.offset)
     train_actions = train_dataset.actions.keys()
 
     # with open('a.txt', 'w') as f1, open('b.txt', 'w') as f2:
@@ -152,17 +174,30 @@ def main(args):
     in_size, out_size = train_dataset.get_data_size()
     weights = train_dataset.get_weights()
 
-    sampler = WeightedRandomSampler(weights, len(weights))
+    if args.balance == 'none':
+        sampler = RandomSampler(train_dataset)
+    else:
+        sampler = WeightedRandomSampler(weights, len(weights))
+
     train_loader = DataLoader(train_dataset, batch_size=1, sampler=sampler, num_workers=1, pin_memory=args.cuda)
     val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=1, pin_memory=args.cuda)
 
     # Build the model
-    model = MotionModel(in_size, args.hidden_dim, out_size)
+    model = MotionModel(in_size, out_size,
+                        hidden=args.hd,
+                        dropout=args.dropout,
+                        bidirectional=args.bidirectional,
+                        stack=args.stack,
+                        layers=args.layers,
+                        embed=args.embed)
     if args.cuda:
         model.cuda()
 
     # Create the optimizer and start training-eval loop
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    if args.optim == 'adam':
+        optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    elif args.optim == 'sgd':
+        optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
     # Resume training?
     if args.resume:
@@ -179,11 +214,38 @@ def main(args):
         # Create the run directory and log file
         train_fname = os.path.splitext(os.path.basename(args.train_data))[0]
         val_fname = os.path.splitext(os.path.basename(args.val_data))[0]
-        run_name = 'model_tr-{1}_vl-{2}_lr{0[lr]}_a{0[accumulate]}_wd{0[wd]}_c{0[clip_norm]}_e{0[epochs]}'.format(
-            vars(args), train_fname, val_fname)
+
+        parameters = vars(args)
+        parameters.update(dict(train=train_fname, val=val_fname))
+
+        run_name = 'model_tr-{0[train]}_vl-{0[val]}_' \
+                   'bi{0[bidirectional]}_' \
+                   'emb{0[embed]}_' \
+                   'h{0[hd]}_' \
+                   's{0[stack]}_' \
+                   'l{0[layers]}_' \
+                   'a{0[accumulate]}_' \
+                   'c{0[clip_norm]}_' \
+                   'd{0[dropout]}_' \
+                   'lr{0[lr]}_' \
+                   'wd{0[wd]}_' \
+                   'e{0[epochs]}_' \
+                   'f{0[fps]}_' \
+                   'o-{0[offset]}_' \
+                   'opt-{0[optim]}_' \
+                   'ls{0[label_smoothing]}_' \
+                   'bal-{0[balance]}'.format(parameters)
+
         run_dir = os.path.join('runs/', run_name)
         if not os.path.exists(run_dir):
             os.makedirs(run_dir)
+        else:
+            return
+
+        params = pd.DataFrame(parameters, index=[0])  # an index is mandatory for a single line
+        params_fname = os.path.join(run_dir, 'params.csv')
+        params.to_csv(params_fname, index=False)
+        print(params)
 
     log_file = os.path.join(run_dir, 'log.txt')
     args.log = open(log_file, 'a+')
@@ -194,7 +256,7 @@ def main(args):
         train(train_loader, model, optimizer, epoch, args)
 
         progress_bar.set_description('EVAL')
-        metrics = eval(val_loader, model, args)
+        metrics, accuracy_balance = evaluate(val_loader, model, args)
         print('Eval Epoch {}: Loss={:6.4f} Acc@1={:5.2f} Acc@5={:5.2f}'.format(epoch, *metrics),
               file=args.log, flush=True)
 
@@ -204,7 +266,11 @@ def main(args):
         best_acc = max(best_acc, current_acc1)
 
         # SAVE MODEL
-        fname = 'epoch_{:02d}.pth'.format(epoch)
+        if args.keep:
+            fname = 'epoch_{:02d}.pth'.format(epoch)
+        else:
+            fname = 'last_checkpoint.pth'
+
         fname = os.path.join(run_dir, fname)
         save_checkpoint({
             'epoch': epoch,
@@ -213,19 +279,50 @@ def main(args):
             'optimizer': optimizer.state_dict(),
         }, is_best, fname)
 
+        if args.balance == 'adaptive':
+            # print(accuracy_balance)
+            weights = train_dataset.get_weights(accuracy_balance)
+            sampler = WeightedRandomSampler(weights, len(weights))
+            train_loader = DataLoader(train_dataset, batch_size=1, sampler=sampler, num_workers=1, pin_memory=args.cuda)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train model on motion data')
     parser.add_argument('train_data', help='path to train data file (Pickle file)')
     parser.add_argument('val_data', help='path to val data file (Pickle file)')
-    parser.add_argument('-d', '--hidden-dim', type=int, default=128, help='LSTM hidden state dimension')
-    parser.add_argument('-a', '--accumulate', type=int, default=10, help='batch accumulation')
+    parser.add_argument('-f', '--fps', type=int, default=10, help='resampling FPS')
+    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=0,
+                        help='sequence embedding dimensionality (0 for none)')
+    parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional',
+                        help='use bidirectional LSTM')
+    parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional',
+                        help='use unidirectional LSTM')
+    parser.add_argument('--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
+    parser.add_argument('-s', '--stack', type=int, default=1, help='how many LSTMs to stack')
+    parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
+    parser.add_argument('-d', '--dropout', type=float, default=0.5, help='dropout applied on hidden state')
+    parser.add_argument('-a', '--accumulate', type=int, default=40, help='batch accumulation')
     parser.add_argument('-c', '--clip-norm', type=float, default=0.0, help='max gradient norm (0 for no clipping)')
-    parser.add_argument('-e', '--epochs', type=int, default=60, help='number of training epochs')
-    parser.add_argument('--lr', '--learning-rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('-e', '--epochs', type=int, default=90, help='number of training epochs')
+    parser.add_argument('--lr', '--learning-rate', type=float, default=0.0005, help='learning rate')
     parser.add_argument('--wd', '--weight-decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
-    parser.add_argument('--no-cuda', action='store_true', help='disable CUDA acceleration')
+    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random',
+                        help='offset mode when resampling training data')
+    parser.add_argument('--optim', choices=['sgd', 'adam'], default='adam', help='optimizer')
+    # parser.add_argument('-m','--momentum', type=float, default=0.9, help='momentum (only for SGD)')
+    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1,
+                        help='smooth one-hot labels by this factor')
+    parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none',
+                        help='how to sample during training')
+    parser.add_argument('--keep', action='store_true', dest='keep',
+                        help='keep all checkpoints evaluated during training')
+    parser.add_argument('--no-keep', action='store_false', dest='keep', help='keep only last and best checkpoints')
+    parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA acceleration')
     parser.add_argument('--no-progress', action='store_true', help='disable progress bars')
+    parser.add_argument('--seed', type=int, default=42, help='random seed to reproduce runs')
+    parser.set_defaults(bidirectional=True)
+    parser.set_defaults(cuda=True)
+    parser.set_defaults(keep=False)
     args = parser.parse_args()
     main(args)
