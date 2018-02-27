@@ -32,14 +32,14 @@ def get_run_info(run_dir):
     return run_dir, loss, accuracy, label, best_model, params
 
 
-def load_run(run, data=None):
+def load_run(run, data=None, data_offset='none'):
     run_info = get_run_info(run)
     run_dir, _, _, _, best_model, params = run_info
 
     if data is None:
         data = params['val_data']
 
-    dataset = MotionDataset(data, fps=params.get('fps', 120))
+    dataset = MotionDataset(data, fps=params.get('fps', 120), offset=data_offset)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     in_size, out_size = dataset.get_data_size()
 

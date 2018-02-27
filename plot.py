@@ -122,7 +122,7 @@ def display_status(runs):
 def offset_eval(runs):
     summaries = []
     for run in runs:
-        run_info, model, loader = load_run(run, data=args.data)
+        run_info, model, loader = load_run(run, data=args.data, data_offset='all')
         params = run_info[-1]
         dataset = loader.dataset
 
