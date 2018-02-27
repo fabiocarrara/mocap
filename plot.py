@@ -2,7 +2,6 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
-import re
 import glob2 as glob2
 import torch.nn.functional as F
 
@@ -10,12 +9,10 @@ import matplotlib
 import torch
 from sklearn.metrics import confusion_matrix, accuracy_score
 from torch.autograd import Variable
-from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-from dataset import MotionDataset
-from model import MotionModel
+from utils import get_run_info, load_run, get_run_summary
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -25,32 +22,8 @@ sns.set_style('whitegrid')
 # sns.set_context('paper')
 
 
-def get_series(log):
-    loss_series = []
-    accuracy_series = []
-    regexp = r'.*Loss=(\s*\d+\.\d+).*Acc@1=(\s*\d+\.\d+).*'
-    with open(log, 'r') as f:
-        for line in f:
-            if line.startswith('Eval'):
-                matches = re.match(regexp, line)
-                loss, accuracy = matches.groups()
-                loss_series.append(float(loss))
-                accuracy_series.append(float(accuracy))
-    return loss_series, accuracy_series
-
-
-def get_run_info(log):
-    run_dir = os.path.dirname(log)
-    label = os.path.basename(run_dir).replace(r'model_tr-split1_vl-split2_', '')
-    best_model = os.path.join(run_dir, 'model_best.pth.tar')
-    params = os.path.join(run_dir, 'params.csv')
-    params = pd.read_csv(params).to_dict(orient='records')[0]
-    loss, accuracy = get_series(log)
-    return run_dir, loss, accuracy, label, best_model, params
-
-
-def train_plot(logs):
-    run_infos = [get_run_info(log) for log in logs]
+def train_plot(runs):
+    run_infos = [get_run_info(run) for run in runs]
     fig, (ax1, ax2) = plt.subplots(2, 1)
     ax1.set_title('Evaluation Loss')
     ax2.set_title('Evaluation Accuracy')
@@ -61,33 +34,6 @@ def train_plot(logs):
     plt.legend(loc='best', prop={'size': 6})
     plt.tight_layout()
     plt.savefig('train_progress.pdf')
-
-
-def load_run(log, data=None):
-    run_info = get_run_info(log)
-    run_dir, _, _, _, best_model, params = run_info
-
-    if data is None:
-        data = params['val_data']
-
-    dataset = MotionDataset(data, fps=params.get('fps', 120))
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
-    in_size, out_size = dataset.get_data_size()
-
-    model = MotionModel(in_size, out_size,
-                        hidden=params.get('hd', 512),
-                        dropout=params.get('dropout', 0),
-                        bidirectional=params.get('bidirectional', False),
-                        stack=params.get('stack', 1),
-                        layers=params.get('layers', 2),
-                        embed=params.get('embed', 64)
-                        )
-    if params['cuda']:
-        model.cuda()
-    checkpoint = torch.load(best_model)
-    model.load_state_dict(checkpoint['state_dict'])
-    model.eval()
-    return run_info, model, loader
 
 
 def predict(model, loader, cuda=False):
@@ -120,9 +66,9 @@ def predict(model, loader, cuda=False):
     return predictions, targets, confidences
 
 
-def confusion_plot(logs):
-    for log in logs:
-        run_info, model, loader = load_run(log, data=args.data)
+def confusion_plot(runs):
+    for run in runs:
+        run_info, model, loader = load_run(run, data=args.data)
         run_dir, _, _, label, _, params = run_info
         dataset = loader.dataset
 
@@ -160,21 +106,8 @@ def confusion_plot(logs):
         del model, loader, predictions, targets
 
 
-def get_run_summary(info, **kwargs):
-    run_dir, loss, accuracy, label, best_model, params = info
-    best_loss = min(loss)
-    best_acc, epoch = max((a, i) for i, a in enumerate(accuracy))
-    params.update({
-        'best_loss': best_loss,
-        'best_acc': best_acc,
-        'best_epoch': epoch,
-    })
-    params.update(kwargs)
-    return pd.DataFrame(params, index=[0])
-
-
-def display_status(logs):
-    infos = [get_run_info(log) for log in logs]
+def display_status(runs):
+    infos = [get_run_info(r) for r in runs]
     summaries = [get_run_summary(i) for i in infos]
     summary = pd.concat(summaries, ignore_index=True).sort_values('best_acc', ascending=False)
 
@@ -186,10 +119,10 @@ def display_status(logs):
             print(summary)
 
 
-def offset_eval(logs):
+def offset_eval(runs):
     summaries = []
-    for log in logs:
-        run_info, model, loader = load_run(log, data=args.data)
+    for run in runs:
+        run_info, model, loader = load_run(run, data=args.data)
         params = run_info[-1]
         dataset = loader.dataset
 
@@ -213,25 +146,47 @@ def offset_eval(logs):
             print(summary)
 
 
+def ablation(runs):
+    summaries = [get_run_summary(get_run_info(r)) for r in runs]
+    summary = pd.concat(summaries, ignore_index=True)
+
+    # Drop cols with unique value everywhere
+    # value_counts = summary.apply(pd.Series.nunique)
+    # cols_to_drop = value_counts[value_counts < 2].index
+    # summary = summary.drop(cols_to_drop, axis=1)
+
+    params = ['bidirectional', 'embed', 'hd', 'layers']
+    for p in params:
+        rest = params[:]
+        rest.remove(p)
+        table = summary.pivot_table(values='best_acc', columns=p, index=rest)
+        table = table.mean()
+        print(table)
+
+
 def main(args):
     logs = glob2.glob(os.path.join(args.run_dir, '**/log.txt'))
+    runs = [os.path.dirname(l) for l in logs]
 
     if args.type == 'train':
-        train_plot(logs)
+        train_plot(runs)
 
     if args.type == 'confusion':
-        confusion_plot(logs)
+        confusion_plot(runs)
 
     if args.type == 'status':
-        display_status(logs)
+        display_status(runs)
 
     if args.type == 'multi-eval':
-        offset_eval(logs)
+        offset_eval(runs)
+
+    if args.type == 'ablation':
+        ablation(runs)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parse motion data')
-    parser.add_argument('type', choices=['train', 'confusion', 'status', 'multi-eval'], help='what to plot')
+    parser.add_argument('type', choices=['train', 'confusion', 'status', 'multi-eval', 'ablation'], help='what to plot')
     parser.add_argument('run_dir', nargs='?', default='runs/', help='folder in which logs are searched')
     parser.add_argument('-d', '--data', help='eval data (for confusion)')
     parser.add_argument('-o', '--output', help='outfile (for status)')
