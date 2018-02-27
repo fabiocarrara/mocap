@@ -24,7 +24,6 @@ class MotionModel(nn.Module):
         self.classifier = nn.Sequential(*classifier_layers)
 
     def forward(self, input):
-
         input = input.view(-1, self.in_size)  # seq, data
         if self.embed is not None:
             input = self.embed(input)  # embed all data in the sequence
@@ -35,3 +34,15 @@ class MotionModel(nn.Module):
             outputs, hidden = stack_lstm(outputs)
         last_out = hidden[1].view(1, -1)
         return self.classifier(last_out)
+
+    def extract(self, input):
+        input = input.view(-1, self.in_size)  # seq, data
+        if self.embed is not None:
+            input = self.embed(input)  # embed all data in the sequence
+
+        input = input.unsqueeze(1)  # seq, batch, data
+        outputs, hidden = self.lstm(input)
+        for stack_lstm in self.stack:
+            outputs, hidden = stack_lstm(outputs)
+        last_out = hidden[1].view(1, -1)
+        return last_out
