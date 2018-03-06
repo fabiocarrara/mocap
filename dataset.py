@@ -7,15 +7,37 @@ from torch.utils.data import Dataset
 
 
 class MotionDataset(Dataset):
-    def __init__(self, data_file, at_least=None, keep_actions=None, fps=120, offset='none'):
+    def __init__(self, data_file, at_least=None, keep_actions=None, fps=120, offset='none', mapper=None):
         with open(data_file, 'rb') as in_file:
             self.data = pickle.load(in_file)
+
+        # check if we are dealing with annotated subsequences or multi-annotated sequences
+        self.multi = 'annotations' in self.data[0]
+
+        if mapper:
+            descriptions = pd.read_csv(mapper, sep=';', index_col=0,
+                                       names=['OldLabel', 'Label', 'Description'])
+            for s in self.data:
+                if self.multi:
+                    for a in s['annotations']:
+                        a['action_id'] = descriptions.loc[a['action_id'], 'Label']
+                else:
+                    s['action_id'] = descriptions.loc[s['action_id'], 'Label']
+
+            descriptions = descriptions.set_index('Label')
+        else:
+            descriptions = pd.read_csv('data/action_descriptions.txt', sep=';', index_col=0,
+                                       names=['Label', 'Description'])
+            descriptions = descriptions.replace({'hdm05_spec_': ''}, regex=True)
 
         assert offset in ('none', 'random', 'all'), "offset must be one of: none, random, all"
 
         self.skip = round(120.0 / fps)
         self.offset = offset
-        self.actions = Counter(s['action_id'] for s in self.data)
+        if self.multi:
+            self.actions = Counter(a['action_id'] for s in self.data for a in s['annotations'])
+        else:
+            self.actions = Counter(s['action_id'] for s in self.data)
 
         if keep_actions:
             self.actions = filter(lambda x: x[0] in keep_actions, self.actions.items())
@@ -26,13 +48,16 @@ class MotionDataset(Dataset):
             self.actions = Counter(dict(self.actions))
 
         if at_least or keep_actions:
-            self.data = list(filter(lambda x: x['action_id'] in self.actions, self.data))
+            if self.multi:
+                for s in self.data:
+                    s['annotations'] = list(filter(lambda x: x['action_id'] in self.actions, s['annotations']))
+            else:
+                self.data = list(filter(lambda x: x['action_id'] in self.actions, self.data))
 
         self.action_labels = sorted(self.actions.keys())
-        descriptions = pd.read_csv('data/action_descriptions.txt', sep=';', index_col=0, names=['Label', 'Description'])
-        descriptions = descriptions.replace({'hdm05_spec_': ''}, regex=True)
         self.action_descriptions = descriptions.loc[self.action_labels, 'Description'].values
         self.action_id_to_ix = {a: i for i, a in enumerate(self.action_labels)}
+        self.n_actions = len(self.actions)
 
         print('Loaded: {} (Samples: {})'.format(data_file, len(self.data)))
         # pprint(self.actions)
@@ -51,10 +76,21 @@ class MotionDataset(Dataset):
             offset = index // len(self.data)
         sequence = sample['data'][offset::self.skip, ...]
         x = torch.from_numpy(sequence)
-        y = self.action_id_to_ix[sample['action_id']]
+        if self.multi:
+            n_samples = len(sample['data'])
+            y = torch.zeros(n_samples, self.n_actions)
+            for a in sample['annotations']:
+                class_id = self.action_id_to_ix[a['action_id']]
+                start = a['start_frame']
+                end = a['start_frame'] + a['duration']
+                y[start:end, class_id] = 1
+            y = y[offset::self.skip, ...]
+        else:
+            y = self.action_id_to_ix[sample['action_id']]
         return x, y
 
     def get_weights(self, action_balance=None):
+        assert not self.multi, "Cannot use get_weights() with multi-annotated sequences"
         n_samples = float(len(self.data))
         if action_balance is None:
             weights = [n_samples / self.actions[s['action_id']] for s in self.data]
@@ -66,3 +102,14 @@ class MotionDataset(Dataset):
         in_size = self.data[0]['data'][0].size
         out_size = len(self.actions)
         return in_size, out_size
+
+
+if __name__ == '__main__':
+
+    dataset = MotionDataset('data/split2.pkl', fps=10, mapper='data/HDM05-category_mapper-130vs65.csv')
+    print(dataset.actions)
+    print(len(dataset.actions))
+
+    dataset = MotionDataset('data/split1.pkl', fps=10, mapper='data/HDM05-category_mapper-130vs65.csv')
+    print(dataset.actions)
+    print(len(dataset.actions))
