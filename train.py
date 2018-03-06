@@ -23,6 +23,7 @@ def accuracy(output, target, topk=(1, 5)):
     """Computes the accuracy@k for the specified values of k"""
     maxk = max(topk)
     batch_size = target.size(0)
+    output = output.data if isinstance(output, Variable) else output
 
     vals, pred = output.topk(maxk, dim=1, largest=True, sorted=True)
     pred = pred.t()
@@ -32,8 +33,35 @@ def accuracy(output, target, topk=(1, 5)):
     for k in topk:
         correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
         correct_k.mul_(100.0 / batch_size)
-        res.append(correct_k.data[0])
+        res.append(correct_k[0])
     return res
+
+
+def compute_loss(output, target, args):
+
+    if args.head == 'softmax' and args.label_smoothing == 0:
+        return F.cross_entropy(output, target)
+
+    n_classes = output.shape[1]
+
+    # build one-hot vector
+    target = target.data.cpu()[0]
+    y = torch.zeros(1, n_classes)
+    y[0, target] = 1
+
+    if args.cuda:
+        y = y.cuda()
+    y = Variable(y, requires_grad=False)
+
+    if args.label_smoothing:
+        y = y * (1 - args.label_smoothing) + \
+            (1 - y) * args.label_smoothing / (n_classes - 1)
+
+    if args.head == 'softmax':
+        return torch.sum(- y * F.log_softmax(output, dim=1), 1).mean()
+
+    if args.head == 'sigmoid':
+        return F.binary_cross_entropy_with_logits(output, y)
 
 
 def evaluate(loader, model, args):
@@ -43,8 +71,9 @@ def evaluate(loader, model, args):
     avg_acc1 = 0.0
     avg_acc5 = 0.0
 
-    action_correct = torch.zeros(len(loader.dataset.actions))
-    action_count = torch.zeros(len(loader.dataset.actions))
+    n_classes = len(loader.dataset.actions)
+    action_correct = torch.zeros(n_classes)
+    action_count = torch.zeros(n_classes)
 
     progress_bar = tqdm(loader, disable=args.no_progress)
     for i, (x, y) in enumerate(progress_bar):
@@ -52,15 +81,16 @@ def evaluate(loader, model, args):
         if args.cuda:
             x = x.cuda()
             y = y.cuda(async=True)
+
         x = Variable(x, volatile=True)
         y = Variable(y, volatile=True)
 
         y_hat = model(x)
 
-        loss = F.cross_entropy(y_hat, y)
+        loss = compute_loss(y_hat, y, args)
         avg_loss += loss.data[0]
 
-        acc1, acc5 = accuracy(y_hat, y, topk=(1, 5))
+        acc1, acc5 = accuracy(y_hat.cpu(), _y, topk=(1, 5))
         action_correct[_y] += (acc1 / 100.0) + (acc5 / 100.0)
         action_count[_y] += 1
 
@@ -89,24 +119,18 @@ def train(loader, model, optimizer, epoch, args):
     n_samples = len(loader.dataset)
     progress_bar = tqdm(loader, disable=args.no_progress)
     for i, (x, y) in enumerate(progress_bar):
-        _y = y
         if args.cuda:
             x = x.cuda()
             y = y.cuda(async=True)
+
         x = Variable(x, requires_grad=False)
         y = Variable(y, requires_grad=False)
 
         y_hat = model(x)
-        if args.label_smoothing:
-            one_hot = torch.zeros_like(y_hat)
-            one_hot[0, _y[0]] = 1
-            soft_targets = one_hot * (1 - args.label_smoothing) + \
-                           (1 - one_hot) * args.label_smoothing / (y_hat.shape[1] - 1)
-            loss = torch.sum(- soft_targets * F.log_softmax(y_hat, dim=1), 1).mean()
-        else:
-            loss = F.cross_entropy(y_hat, y)
 
+        loss = compute_loss(y_hat, y, args)
         loss.backward()
+
         avg_loss += loss.data[0]
 
         if (i + 1) % args.accumulate == 0 or (i + 1) == n_samples:
@@ -157,10 +181,10 @@ def main(args):
         torch.cuda.manual_seed(args.seed)
 
     # Load datasets and build data loaders
-    val_dataset = MotionDataset(args.val_data, fps=args.fps)
+    val_dataset = MotionDataset(args.val_data, fps=args.fps, mapper=args.mapper)
     val_actions = val_dataset.actions.keys()
 
-    train_dataset = MotionDataset(args.train_data, keep_actions=val_actions, fps=args.fps, offset=args.offset)
+    train_dataset = MotionDataset(args.train_data, keep_actions=val_actions, fps=args.fps, offset=args.offset, mapper=args.mapper)
     train_actions = train_dataset.actions.keys()
 
     # with open('a.txt', 'w') as f1, open('b.txt', 'w') as f2:
@@ -172,11 +196,11 @@ def main(args):
             len(train_actions), len(val_actions))
 
     in_size, out_size = train_dataset.get_data_size()
-    weights = train_dataset.get_weights()
 
     if args.balance == 'none':
         sampler = RandomSampler(train_dataset)
     else:
+        weights = train_dataset.get_weights()
         sampler = WeightedRandomSampler(weights, len(weights))
 
     train_loader = DataLoader(train_dataset, batch_size=1, sampler=sampler, num_workers=1, pin_memory=args.cuda)
@@ -224,6 +248,7 @@ def main(args):
                    'h{0[hd]}_' \
                    's{0[stack]}_' \
                    'l{0[layers]}_' \
+                   '{0[head]}_' \
                    'a{0[accumulate]}_' \
                    'c{0[clip_norm]}_' \
                    'd{0[dropout]}_' \
@@ -236,16 +261,19 @@ def main(args):
                    'ls{0[label_smoothing]}_' \
                    'bal-{0[balance]}'.format(parameters)
 
-        run_dir = os.path.join('runs/', run_name)
+        runs_parent_dir = 'debug' if args.debug else args.run_dir
+        run_dir = os.path.join(runs_parent_dir, run_name)
         if not os.path.exists(run_dir):
             os.makedirs(run_dir)
-        else:
+        elif not args.debug:
             return
 
         params = pd.DataFrame(parameters, index=[0])  # an index is mandatory for a single line
         params_fname = os.path.join(run_dir, 'params.csv')
         params.to_csv(params_fname, index=False)
-        print(params)
+
+        with pd.option_context('display.width', None), pd.option_context('max_columns', None):
+            print(params)
 
     log_file = os.path.join(run_dir, 'log.txt')
     args.log = open(log_file, 'a+')
@@ -288,10 +316,20 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train model on motion data')
+    # DATA PARAMS
     parser.add_argument('train_data', help='path to train data file (Pickle file)')
     parser.add_argument('val_data', help='path to val data file (Pickle file)')
+    parser.add_argument('--mapper', help='class mapper csv file')
     parser.add_argument('-f', '--fps', type=int, default=10, help='resampling FPS')
-    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=0,
+    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random',
+                        help='offset mode when resampling training data')
+    parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none',
+                        help='how to sample during training')
+    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1,
+                        help='smooth one-hot labels by this factor')
+
+    # NETWORK PARAMS
+    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=48,
                         help='sequence embedding dimensionality (0 for none)')
     parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional',
                         help='use bidirectional LSTM')
@@ -301,28 +339,31 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--stack', type=int, default=1, help='how many LSTMs to stack')
     parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
     parser.add_argument('-d', '--dropout', type=float, default=0.5, help='dropout applied on hidden state')
+    parser.add_argument('--head', choices=['softmax', 'sigmoid'], default='softmax', help='networks head')
+
+    # OPTIMIZER PARAMS
+    parser.add_argument('--optim', choices=['sgd', 'adam'], default='adam', help='optimizer')
+    # parser.add_argument('-m','--momentum', type=float, default=0.9, help='momentum (only for SGD)')
     parser.add_argument('-a', '--accumulate', type=int, default=40, help='batch accumulation')
     parser.add_argument('-c', '--clip-norm', type=float, default=0.0, help='max gradient norm (0 for no clipping)')
-    parser.add_argument('-e', '--epochs', type=int, default=90, help='number of training epochs')
+    parser.add_argument('-e', '--epochs', type=int, default=150, help='number of training epochs')
     parser.add_argument('--lr', '--learning-rate', type=float, default=0.0005, help='learning rate')
     parser.add_argument('--wd', '--weight-decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
-    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random',
-                        help='offset mode when resampling training data')
-    parser.add_argument('--optim', choices=['sgd', 'adam'], default='adam', help='optimizer')
-    # parser.add_argument('-m','--momentum', type=float, default=0.9, help='momentum (only for SGD)')
-    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1,
-                        help='smooth one-hot labels by this factor')
-    parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none',
-                        help='how to sample during training')
+
+    # MISC PARAMS
     parser.add_argument('--keep', action='store_true', dest='keep',
                         help='keep all checkpoints evaluated during training')
     parser.add_argument('--no-keep', action='store_false', dest='keep', help='keep only last and best checkpoints')
     parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA acceleration')
     parser.add_argument('--no-progress', action='store_true', help='disable progress bars')
+    parser.add_argument('--run-dir', default='runs', help='where to place this run')
     parser.add_argument('--seed', type=int, default=42, help='random seed to reproduce runs')
+    parser.add_argument('--debug', action='store_true', help='debug mode')
+
     parser.set_defaults(bidirectional=True)
     parser.set_defaults(cuda=True)
+    parser.set_defaults(debug=False)
     parser.set_defaults(keep=False)
     args = parser.parse_args()
     main(args)
