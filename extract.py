@@ -23,7 +23,7 @@ def main(args):
     if args.format == 'jan':
         with open(args.output, 'w') as f:
             for sample, feature in tqdm(zip(loader.dataset.data, features), total=len(features)):
-                f.write('# objectKey messif.objects.keys.AbstractObjectKey {}\n'.format(sample['id']))
+                f.write('#objectKey messif.objects.keys.AbstractObjectKey {}\n'.format(sample['id']))
                 feature.tofile(f, sep=',')
                 f.write('\n')
         return
