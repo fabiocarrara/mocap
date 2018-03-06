@@ -24,22 +24,27 @@ sns.set_style('whitegrid')
 
 def train_plot(runs):
     run_infos = [get_run_info(run) for run in runs]
-    fig, (ax1, ax2) = plt.subplots(2, 1)
-    ax1.set_title('Evaluation Loss')
-    ax2.set_title('Evaluation Accuracy')
-    for run_dir, loss, accuracy, label, best_model, params in run_infos:
-        ax1.plot(loss, label=label)
-        ax2.plot(accuracy, label=label)
-    ax2.set_ylim([0, 100])
-    plt.legend(loc='best', prop={'size': 6})
+    metrics = run_infos[0][1].keys()
+    n_metrics = len(metrics)
+    fig, axes = plt.subplots(n_metrics, 1)
+    for metric, ax in zip(metrics, axes):
+        ax.set_title('Evaluation {}'.format(metric))
+
+    for run_dir, metrics_vals, label, best_model, params in run_infos:
+        for m, ax in zip(metrics, axes):
+            if m in metrics_vals:
+                ax.set_title(m)
+                ax.plot(metrics_vals[m], label=label)
+
+    # plt.legend(loc='best', prop={'size': 6})
     plt.tight_layout()
     plt.savefig('train_progress.pdf')
 
 
 def predict(model, loader, cuda=False):
-    predictions = []
     targets = []
     confidences = []
+    predictions = []
 
     for x, y in tqdm(loader):
         if cuda:
@@ -69,7 +74,7 @@ def predict(model, loader, cuda=False):
 def confusion_plot(runs):
     for run in runs:
         run_info, model, loader = load_run(run, data=args.data)
-        run_dir, _, _, label, _, params = run_info
+        run_dir, _, label, _, params = run_info
         dataset = loader.dataset
 
         predictions, targets, _ = predict(model, loader, cuda=params['cuda'])
@@ -109,7 +114,7 @@ def confusion_plot(runs):
 def display_status(runs):
     infos = [get_run_info(r) for r in runs]
     summaries = [get_run_summary(i) for i in infos]
-    summary = pd.concat(summaries, ignore_index=True).sort_values('best_acc', ascending=False)
+    summary = pd.concat(summaries, ignore_index=True)  # .sort_values('best_acc', ascending=False)
 
     if args.output:
         summary.to_csv(args.output, index=False)
@@ -122,7 +127,7 @@ def display_status(runs):
 def offset_eval(runs):
     summaries = []
     for run in runs:
-        run_info, model, loader = load_run(run, data=args.data, data_offset='all')
+        run_info, model, loader = load_run(run, data=args.data, offset='all')
         params = run_info[-1]
         dataset = loader.dataset
 
