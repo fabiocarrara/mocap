@@ -1,10 +1,9 @@
 import argparse
 import glob
 
+import os
 import pandas as pd
 import re
-
-import os
 import shutil
 import torch
 import torch.nn.functional as F
@@ -315,26 +314,21 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train model on motion data')
+    parser = argparse.ArgumentParser(description='Train model on motion data',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # DATA PARAMS
     parser.add_argument('train_data', help='path to train data file (Pickle file)')
     parser.add_argument('val_data', help='path to val data file (Pickle file)')
     parser.add_argument('--mapper', help='class mapper csv file')
     parser.add_argument('-f', '--fps', type=int, default=10, help='resampling FPS')
-    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random',
-                        help='offset mode when resampling training data')
-    parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none',
-                        help='how to sample during training')
-    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1,
-                        help='smooth one-hot labels by this factor')
+    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random', help='offset mode when resampling training data')
+    parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none', help='how to sample during training')
+    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1, help='smooth one-hot labels by this factor')
 
     # NETWORK PARAMS
-    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=48,
-                        help='sequence embedding dimensionality (0 for none)')
-    parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional',
-                        help='use bidirectional LSTM')
-    parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional',
-                        help='use unidirectional LSTM')
+    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=48, help='sequence embedding dimensionality (0 for none)')
+    parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional', help='use bidirectional LSTM')
+    parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional', help='use unidirectional LSTM')
     parser.add_argument('--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
     parser.add_argument('-s', '--stack', type=int, default=1, help='how many LSTMs to stack')
     parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
@@ -352,8 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
 
     # MISC PARAMS
-    parser.add_argument('--keep', action='store_true', dest='keep',
-                        help='keep all checkpoints evaluated during training')
+    parser.add_argument('--keep', action='store_true', dest='keep', help='keep all checkpoints evaluated during training')
     parser.add_argument('--no-keep', action='store_false', dest='keep', help='keep only last and best checkpoints')
     parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA acceleration')
     parser.add_argument('--no-progress', action='store_true', help='disable progress bars')

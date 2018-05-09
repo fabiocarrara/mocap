@@ -1,10 +1,9 @@
 import argparse
 import glob
-import numpy as np
-import pandas as pd
-import re
 
 import os
+import pandas as pd
+import re
 import shutil
 import torch
 import torch.nn.functional as F
@@ -28,6 +27,26 @@ def compute_loss(output, target, args):
                  (1 - target) * args.label_smoothing / (n_classes - 1)
 
     return F.binary_cross_entropy_with_logits(output, target)
+
+
+def f1_score(targets, predictions, multiple_thr=False):
+    if multiple_thr:
+        category_f1s = []
+        for i in range(targets.shape[1]):
+            p, r, _ = precision_recall_curve(targets[:, i], predictions[:, i])
+            f1 = 2 * (p * r) / (p + r)
+            category_f1s.append(max(f1))
+
+        category_f1s = torch.FloatTensor(category_f1s)
+        support = targets.sum(dim=0)
+        microF1 = (category_f1s * support).sum() / support.sum()
+        macroF1 = category_f1s.mean()
+        return microF1, macroF1
+
+    else:
+        p, r, _ = precision_recall_curve(targets.view(-1), predictions.view(-1))
+        f1 = 2 * (p * r) / (p + r)
+        return max(f1)
 
 
 def evaluate(loader, model, args):
@@ -69,14 +88,13 @@ def evaluate(loader, model, args):
     predictions = torch.cat(predictions, dim=0)
     targets = torch.cat(targets, dim=0)
 
-    run_ap = average_precision_score(targets, predictions, average='micro')
-    p, r, t = precision_recall_curve(targets.view(-1), predictions.view(-1))
-    t = np.insert(t, 0, 0)
+    micro_ap = average_precision_score(targets, predictions, average='micro')
+    macro_ap = average_precision_score(targets, predictions, average='macro')
 
-    f1 = 2 * (p * r) / (p + r)
-    best_f1, best_thr = max(zip(f1, t))
+    single_thr_f1 = f1_score(targets, predictions)
+    multi_thr_micro_f1, multi_thr_macro_f1 = f1_score(targets, predictions, multiple_thr=True)
 
-    return run_loss, run_ap, (p, r, t), (best_f1, best_thr)
+    return run_loss, micro_ap, macro_ap, single_thr_f1, multi_thr_micro_f1, multi_thr_macro_f1
 
 
 def train(loader, model, optimizer, epoch, args):
@@ -164,7 +182,7 @@ def main(args):
 
     assert len(train_actions) == len(val_actions), \
         "Train and val sets should have same number of actions ({} vs {})".format(
-           len(train_actions), len(val_actions))
+            len(train_actions), len(val_actions))
 
     in_size, out_size = train_dataset.get_data_size()
 
@@ -201,7 +219,7 @@ def main(args):
         checkpoint = torch.load(last_checkpoint)
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        best_ap = checkpoint['best_ap']
+        best_ap = checkpoint['best_micro_ap']
         start_epoch = checkpoint['epoch'] + 1
     else:
         best_ap = 0
@@ -225,7 +243,7 @@ def main(args):
                    'lr{0[lr]}_' \
                    'wd{0[wd]}_' \
                    'e{0[epochs]}_' \
-                   'f{0[fps]}_' \
+                   'f{0[fps]:g}_' \
                    'o-{0[offset]}_' \
                    'opt-{0[optim]}_' \
                    'ls{0[label_smoothing]}_' \
@@ -250,62 +268,56 @@ def main(args):
 
     progress_bar = trange(start_epoch, args.epochs + 1, initial=start_epoch, disable=args.no_progress)
     for epoch in progress_bar:
-        progress_bar.set_description('TRAIN')
+        progress_bar.set_description('TRAIN [CurBestAP={:4.3f}]'.format(best_ap))
         train(train_loader, model, optimizer, epoch, args)
 
-        progress_bar.set_description('EVAL')
+        progress_bar.set_description('EVAL [CurBestAP={:4.3f}]'.format(best_ap))
         metrics = evaluate(val_loader, model, args)
-        current_loss, current_ap, prt, (cur_best_f1, cur_best_thr) = metrics
-        print('Eval Epoch {}: Loss={:6.4f} microAP={:4.3f} optimF1={:4.3f}'.format(epoch, current_loss, current_ap, cur_best_f1),
+
+        print('Eval Epoch {}: '
+              'Loss={:6.4f} '
+              'microAP={:4.3f} '
+              'macroAP={:4.3f} '
+              'F1={:4.3f} '
+              'microMultiF1={:4.3f} '
+              'macroMultiF1={:4.3f}'.format(epoch, *metrics),
               file=args.log, flush=True)
 
-        is_best = current_ap > best_ap
-        best_ap = max(best_ap, current_ap)
+        current_micro_ap = metrics[1]
+        is_best = current_micro_ap > best_ap
+        best_ap = max(best_ap, current_micro_ap)
 
         # SAVE MODEL
         if args.keep:
             fname = 'epoch_{:02d}.pth'.format(epoch)
-            prt_fname = 'prt_epoch_{:02d}.csv'.format(epoch)
         else:
             fname = 'last_checkpoint.pth'
-            prt_fname = 'prt_last_checkpoint.csv'.format(epoch)
 
         fname = os.path.join(run_dir, fname)
-        prt_fname = os.path.join(run_dir, prt_fname)
-
         save_checkpoint({
             'epoch': epoch,
-            'best_ap': best_ap,
+            'best_micro_ap': best_ap,
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
         }, is_best, fname)
 
-        # prt = dict(zip(['Precision', 'Recall', 'Threshold'], prt))
-        # prt = pd.DataFrame(prt)
-        # prt.to_csv(prt_fname)
-
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train model on motion data')
+    parser = argparse.ArgumentParser(description='Train model on motion data',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     # DATA PARAMS
     parser.add_argument('train_data', help='path to train data file (Pickle file)')
     parser.add_argument('val_data', help='path to val data file (Pickle file)')
     parser.add_argument('--mapper', help='class mapper csv file')
-    parser.add_argument('-f', '--fps', type=int, default=10, help='resampling FPS')
-    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random',
-                        help='offset mode when resampling training data')
-    parser.add_argument('--balance', choices=['none'], default='none',
-                        help='how to sample during training')
-    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.0,
-                        help='smooth one-hot labels by this factor')
+    parser.add_argument('-f', '--fps', type=float, default=120, help='resampling FPS')
+    parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random', help='offset mode when resampling training data')
+    parser.add_argument('--balance', choices=['none'], default='none', help='how to sample during training')
+    parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.0, help='smooth one-hot labels by this factor')
 
     # NETWORK PARAMS
-    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=48,
-                        help='sequence embedding dimensionality (0 for none)')
-    parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional',
-                        help='use bidirectional LSTM')
-    parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional',
-                        help='use unidirectional LSTM')
+    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=64, help='sequence embedding dimensionality (0 for none)')
+    parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional', help='use bidirectional LSTM')
+    parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional', help='use unidirectional LSTM')
     parser.add_argument('--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
     parser.add_argument('-s', '--stack', type=int, default=1, help='how many LSTMs to stack')
     parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
@@ -315,16 +327,15 @@ if __name__ == '__main__':
     # OPTIMIZER PARAMS
     parser.add_argument('--optim', choices=['sgd', 'adam'], default='adam', help='optimizer')
     # parser.add_argument('-m','--momentum', type=float, default=0.9, help='momentum (only for SGD)')
-    parser.add_argument('-a', '--accumulate', type=int, default=40, help='batch accumulation')
-    parser.add_argument('-c', '--clip-norm', type=float, default=0.0, help='max gradient norm (0 for no clipping)')
-    parser.add_argument('-e', '--epochs', type=int, default=150, help='number of training epochs')
+    parser.add_argument('-a', '--accumulate', type=int, default=1, help='batch accumulation')
+    parser.add_argument('-c', '--clip-norm', type=float, default=10.0, help='max gradient norm (0 for no clipping)')
+    parser.add_argument('-e', '--epochs', type=int, default=200, help='number of training epochs')
     parser.add_argument('--lr', '--learning-rate', type=float, default=0.0005, help='learning rate')
     parser.add_argument('--wd', '--weight-decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
 
     # MISC PARAMS
-    parser.add_argument('--keep', action='store_true', dest='keep',
-                        help='keep all checkpoints evaluated during training')
+    parser.add_argument('--keep', action='store_true', dest='keep', help='keep all checkpoints evaluated during training')
     parser.add_argument('--no-keep', action='store_false', dest='keep', help='keep only last and best checkpoints')
     parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA acceleration')
     parser.add_argument('--no-progress', action='store_true', help='disable progress bars')

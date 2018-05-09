@@ -53,14 +53,8 @@ def parse_sequence(lines):
 def get_ids_to_keep(split_file, format='list', train=True):
 
     if format == 'list':
-        id_regexp = r'.*/(\d+_\d+_\d+_\d+).*'
-
-        def get_id(line):
-            matches = re.match(id_regexp, line)
-            return matches.groups()[0] if matches else None
-
         with open(split_file, 'rt') as f:
-            ids = {get_id(line) for line in f}
+            ids = set(map(str.rstrip, f.readlines()))
 
     elif format == 'csv':
         ids = set(pd.read_csv(split_file, header=None).iloc[0])
@@ -80,6 +74,8 @@ def parse_annotated_sequence(lines, annotations):
     seq_id = int(lines[0].split(' ')[-1])
     duration = int(lines[1].split(';')[0])
     annotations = [a for a in annotations if a['seq_id'] == seq_id]
+    # remove 'others' class from HDM05-15
+    annotations = [a for a in annotations if a['action_id'] != 14]
     for a in annotations:
         if 'data' in a:
             del a['data']

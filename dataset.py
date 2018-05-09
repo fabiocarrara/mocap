@@ -1,3 +1,4 @@
+import os
 import pickle
 from collections import Counter
 
@@ -24,9 +25,10 @@ class MotionDataset(Dataset):
                 else:
                     s['action_id'] = descriptions.loc[s['action_id'], 'Label']
 
-            descriptions = descriptions.set_index('Label')
+            descriptions = descriptions.groupby('Label').aggregate({'Description': lambda x: os.path.commonprefix(x.tolist())})
+
         else:
-            descriptions = pd.read_csv('data/action_descriptions.txt', sep=';', index_col=0,
+            descriptions = pd.read_csv('data/hdm05_action_descriptions.txt', sep=';', index_col=0,
                                        names=['Label', 'Description'])
             descriptions = descriptions.replace({'hdm05_spec_': ''}, regex=True)
 
@@ -34,10 +36,12 @@ class MotionDataset(Dataset):
 
         self.skip = round(120.0 / fps)
         self.offset = offset
+
+        # for HDM05-15 we remove 'other' class (14)
         if self.multi:
-            self.actions = Counter(a['action_id'] for s in self.data for a in s['annotations'])
+            self.actions = Counter(a['action_id'] for s in self.data for a in s['annotations'] if mapper or a['action_id'] != 14)
         else:
-            self.actions = Counter(s['action_id'] for s in self.data)
+            self.actions = Counter(s['action_id'] for s in self.data if mapper or s['action_id'] != 14)
 
         if keep_actions:
             self.actions = filter(lambda x: x[0] in keep_actions, self.actions.items())

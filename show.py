@@ -12,7 +12,7 @@ from torch.autograd import Variable
 
 from tqdm import tqdm
 
-from utils import get_run_info, load_run, get_run_summary
+from utils import get_run_info, load_run, get_run_summary, find_runs
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -26,7 +26,7 @@ def train_plot(runs):
     run_infos = [get_run_info(run) for run in runs]
     metrics = run_infos[0][1].keys()
     n_metrics = len(metrics)
-    fig, axes = plt.subplots(n_metrics, 1)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(5, 3*n_metrics))
     for metric, ax in zip(metrics, axes):
         ax.set_title('Evaluation {}'.format(metric))
 
@@ -168,10 +168,8 @@ def ablation(runs):
         table = table.mean()
         print(table)
 
-
 def main(args):
-    logs = glob2.glob(os.path.join(args.run_dir, '**/log.txt'))
-    runs = [os.path.dirname(l) for l in logs]
+    runs = find_runs(args.run_dir)
 
     if args.type == 'train':
         train_plot(runs)
@@ -190,7 +188,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Parse motion data')
+    parser = argparse.ArgumentParser(description='Show misc info about runs')
     parser.add_argument('type', choices=['train', 'confusion', 'status', 'multi-eval', 'ablation'], help='what to plot')
     parser.add_argument('run_dir', nargs='?', default='runs/', help='folder in which logs are searched')
     parser.add_argument('-d', '--data', help='eval data (for confusion)')
