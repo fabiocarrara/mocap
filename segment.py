@@ -111,7 +111,7 @@ def plot_preditctions(targets, predictions, seq_ids, labels, thr, out):
 
             pad = 21
 
-            ax1.set_ylabel(r'$p(P_i, C_j)$')
+            ax1.set_ylabel(r'$p_{i,j}$')
             ax1.plot(time, y_hat, label=labels)
             ax1.axhline(thr, color='k', linestyle='solid', linewidth=1)
             ax1.get_yaxis().set_ticks([0, 0.5, 1])
@@ -119,7 +119,7 @@ def plot_preditctions(targets, predictions, seq_ids, labels, thr, out):
             ax1.get_xaxis().set_minor_locator(matplotlib.ticker.AutoMinorLocator())
             ax1.tick_params(axis='y', which='major', labelsize=12, labelrotation=90)
 
-            ax2.set_ylabel(r'\textrm{Pred.}', labelpad=pad)
+            ax2.set_ylabel(r'\textrm{Annot.}', labelpad=pad)
             ax2.get_yaxis().set_ticks([])
             ax2.plot(time, y_hat > thr)
             ax2.get_xaxis().set_minor_locator(matplotlib.ticker.AutoMinorLocator())
