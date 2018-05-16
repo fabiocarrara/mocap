@@ -75,6 +75,7 @@ def confusion_plot(runs):
     for run in runs:
         run_info, model, loader = load_run(run, data=args.data)
         run_dir, _, label, _, params = run_info
+        loader = loader[1]
         dataset = loader.dataset
 
         predictions, targets, _ = predict(model, loader, cuda=params['cuda'])
@@ -167,6 +168,7 @@ def ablation(runs):
         table = summary.pivot_table(values='best_acc', columns=p, index=rest)
         table = table.mean()
         print(table)
+
 
 def main(args):
     runs = find_runs(args.run_dir)
