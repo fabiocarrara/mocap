@@ -9,7 +9,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset import MotionDataset
+from dataset import NTUMotionDataset as MotionDataset
 from model import MotionModel
 
 
