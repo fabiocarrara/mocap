@@ -17,6 +17,7 @@ class MotionModel(nn.Module):
                      ) if embed > 0 else None
 
         self.lstm = nn.LSTM(embed if embed > 0 else in_size, rnn_hidden, bidirectional=bidirectional)
+        # TODO: stacks currently not working, change using num_layers in LSTM
         self.stack = [nn.LSTM(rnn_hidden, rnn_hidden, bidirectional=bidirectional) for _ in range(stack - 1)]
         classifier_layers = []
         for _ in range(layers - 1):
@@ -25,8 +26,8 @@ class MotionModel(nn.Module):
         classifier_layers.append(nn.Dropout(dropout))
         classifier_layers.append(nn.Linear(hidden, out_size))
         self.classifier = nn.Sequential(*classifier_layers)
-
-    def forward(self, input):
+        
+    def forward_lstm(self, input):
         input = input.view(-1, self.in_size)  # seq, data
         if self.embed is not None:
             input = self.embed(input)  # embed all data in the sequence
@@ -35,30 +36,20 @@ class MotionModel(nn.Module):
         outputs, hidden = self.lstm(input)
         for stack_lstm in self.stack:
             outputs, hidden = stack_lstm(outputs)
+        
+        return outputs, hidden
+
+    def forward(self, input):
+        outputs, hidden = self.forward_lstm(input)
         last_out = hidden[1].view(1, -1)
         return self.classifier(last_out)
 
     def segment(self, input):
-        input = input.view(-1, self.in_size)  # seq, data
-        if self.embed is not None:
-            input = self.embed(input)  # embed all data in the sequence
-
-        input = input.unsqueeze(1)  # seq, batch, data
-        outputs, hidden = self.lstm(input)
-        for stack_lstm in self.stack:
-            outputs, hidden = stack_lstm(outputs)
-
+        outputs, hidden = self.forward_lstm(input)
         return self.classifier(outputs)
 
     def steps_forward(self, input):
-        input = input.view(-1, self.in_size)  # seq, data
-        if self.embed is not None:
-            input = self.embed(input)  # embed all data in the sequence
-
-        input = input.unsqueeze(1)  # seq, batch, data
-        outputs, hidden = self.lstm(input)
-        for stack_lstm in self.stack:
-            outputs, hidden = stack_lstm(outputs)
+        outputs, hidden = self.forward_lstm(input)
 
         ''' for bidirectional models, we have to reverse the hidden states
             of the second direction in order to have the combined hidden state
@@ -77,13 +68,6 @@ class MotionModel(nn.Module):
         return self.classifier(outputs)
 
     def extract(self, input):
-        input = input.view(-1, self.in_size)  # seq, data
-        if self.embed is not None:
-            input = self.embed(input)  # embed all data in the sequence
-
-        input = input.unsqueeze(1)  # seq, batch, data
-        outputs, hidden = self.lstm(input)
-        for stack_lstm in self.stack:
-            outputs, hidden = stack_lstm(outputs)
+        outputs, hidden = self.forward_lstm(input)
         last_out = hidden[1].view(1, -1)
         return last_out
