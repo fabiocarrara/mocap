@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.sampler import WeightedRandomSampler, RandomSampler
 from tqdm import trange, tqdm
 
-from dataset import MotionDataset
+from dataset import NTUMotionDataset as MotionDataset
 from model import MotionModel
 
 
@@ -185,11 +185,13 @@ def main(args):
         torch.cuda.manual_seed(args.seed)
 
     # Load datasets and build data loaders
-    val_dataset = MotionDataset(args.val_data, fps=args.fps, mapper=args.mapper)
-    val_actions = val_dataset.actions.keys()
-
-    train_dataset = MotionDataset(args.train_data, keep_actions=val_actions, fps=args.fps, offset=args.offset, mapper=args.mapper)
+    
+    # for NTU
+    train_dataset = MotionDataset(args.train_data, fps=args.fps, offset=args.offset)
     train_actions = train_dataset.actions.keys()
+    
+    val_dataset = MotionDataset(args.val_data, fps=args.fps)
+    val_actions = val_dataset.actions.keys()
     
     assert len(train_actions) == len(val_actions), \
         "Train and val sets should have same number of actions ({} vs {})".format(
