@@ -96,8 +96,8 @@ def plot_preditctions(targets, predictions, seq_ids, labels, thr, out):
             order.append(cur_sequence_id)
             cmap = plt.get_cmap('jet')
             colors = cmap(np.linspace(0, 1.0, n_classes))
-            fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 4.5),
-                                     gridspec_kw={'height_ratios': [3.5, 1, 1]})
+            fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 5),
+                                     gridspec_kw={'height_ratios': [1.5, 1, 1]})
 
             for ax in axes:
                 ax.set_ylim([0, 1.1])
@@ -143,7 +143,7 @@ def plot_preditctions(targets, predictions, seq_ids, labels, thr, out):
             sns.despine()
             n_legend_lines = len(lines) // 4
             lgd = axes[-1].legend(lines, legends, loc='center', ncol=4, fontsize='medium',
-                                  bbox_to_anchor=(0.5, -1.5 - 0.14 * n_legend_lines))
+                                  bbox_to_anchor=(0.5, -0.85 - 0.14 * n_legend_lines))
             
             # pdf.savefig(bbox_extra_artists=(lgd, title), bbox_inches='tight')
             pdf.savefig(bbox_extra_artists=(lgd, ), bbox_inches='tight')
