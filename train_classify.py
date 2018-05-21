@@ -160,6 +160,10 @@ def save_checkpoint(state, is_best, filename):
 
 
 def get_last_checkpoint(run_dir):
+    last_checkpoint = os.path.join(run_dir, 'last_checkpoint.pth')
+    if os.path.exists(last_checkpoint):
+        return last_checkpoint
+
     def get_epoch(fname):
         epoch_regex = r'.*epoch_(\d+).pth'
         matches = re.match(epoch_regex, fname)
