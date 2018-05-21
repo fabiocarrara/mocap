@@ -225,6 +225,10 @@ def main(args):
     elif args.optim == 'sgd':
         optimizer = SGD(model.parameters(), lr=args.lr, weight_decay=args.wd)
 
+    scheduler = None
+    if args.lr_scheduler == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 5, args.lr / 10**3)
+
     # Resume training?
     if args.resume:
         run_dir = args.resume
@@ -232,6 +236,8 @@ def main(args):
         checkpoint = torch.load(last_checkpoint)
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
+        # if scheduler:
+        #    scheduler.load_state_dict(checkpoint['scheduler'])
         best_acc = checkpoint['best_accuracy']
         start_epoch = checkpoint['epoch'] + 1
     else:
@@ -255,6 +261,7 @@ def main(args):
                    'c{0[clip_norm]}_' \
                    'd{0[dropout]}_' \
                    'lr{0[lr]}_' \
+                   'sched{0[lr_scheduler]}_' \
                    'wd{0[wd]}_' \
                    'e{0[epochs]}_' \
                    'f{0[fps]}_' \
@@ -282,6 +289,9 @@ def main(args):
 
     progress_bar = trange(start_epoch, args.epochs + 1, initial=start_epoch, disable=args.no_progress)
     for epoch in progress_bar:
+        if scheduler:
+            scheduler.step()
+
         progress_bar.set_description('TRAIN [BestAcc1={:5.2f}]'.format(best_acc))
         train(train_loader, model, optimizer, epoch, args)
 
@@ -307,6 +317,7 @@ def main(args):
             'best_accuracy': best_acc,
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
+            # 'scheduler': scheduler.state_dict() if scheduler else None
         }, is_best, checkpoint_filename)
 
         if args.balance == 'adaptive':
@@ -345,6 +356,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--clip-norm', type=float, default=0.0, help='max gradient norm (0 for no clipping)')
     parser.add_argument('-e', '--epochs', type=int, default=150, help='number of training epochs')
     parser.add_argument('--lr', '--learning-rate', type=float, default=0.0005, help='learning rate')
+    parser.add_argument('--lr-scheduler', '--sched', choices=['none', 'cosine'], default='none', help='learning rate schedule')
     parser.add_argument('--wd', '--weight-decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
 
