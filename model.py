@@ -16,9 +16,10 @@ class MotionModel(nn.Module):
                         nn.Dropout(dropout)
                      ) if embed > 0 else None
 
-        self.lstm = nn.LSTM(embed if embed > 0 else in_size, rnn_hidden, bidirectional=bidirectional)
-        # TODO: stacks currently not working, change using num_layers in LSTM
-        self.stack = [nn.LSTM(rnn_hidden, rnn_hidden, bidirectional=bidirectional) for _ in range(stack - 1)]
+        self.lstm = nn.LSTM(embed if embed > 0 else in_size, rnn_hidden,
+                            num_layers=stack,
+                            bidirectional=bidirectional,
+                            dropout=dropout)
         classifier_layers = []
         for _ in range(layers - 1):
             classifier_layers.append(nn.Linear(hidden, hidden))
@@ -26,22 +27,16 @@ class MotionModel(nn.Module):
         classifier_layers.append(nn.Dropout(dropout))
         classifier_layers.append(nn.Linear(hidden, out_size))
         self.classifier = nn.Sequential(*classifier_layers)
-        
+
     def forward_lstm(self, input):
         input = input.view(-1, self.in_size)  # seq, data
-        if self.embed is not None:
-            input = self.embed(input)  # embed all data in the sequence
-
+        input = self.embed(input) if self.embed is not None else input  # embed all data in the sequence
         input = input.unsqueeze(1)  # seq, batch, data
-        outputs, hidden = self.lstm(input)
-        for stack_lstm in self.stack:
-            outputs, hidden = stack_lstm(outputs)
-        
-        return outputs, hidden
+        return self.lstm(input)
 
     def forward(self, input):
         outputs, hidden = self.forward_lstm(input)
-        last_out = hidden[1].view(1, -1)
+        last_out = outputs[-1]  # this is the last hidden state (last timestep) of the last stacked layer
         return self.classifier(last_out)
 
     def segment(self, input):
