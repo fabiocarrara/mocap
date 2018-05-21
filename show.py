@@ -22,7 +22,18 @@ sns.set_style('whitegrid')
 # sns.set_context('paper')
 
 
-def train_plot(runs):
+def smooth(scalars, weight):  # Weight between 0 and 1
+    last = scalars[0]  # First value in the plot (first timestep)
+    smoothed = list()
+    for point in scalars:
+        smoothed_val = last * weight + (1 - weight) * point  # Calculate smoothed value
+        smoothed.append(smoothed_val)                        # Save it
+        last = smoothed_val                                  # Anchor the last smoothed value
+
+    return smoothed
+
+
+def train_plot(runs, s):
     run_infos = [get_run_info(run) for run in runs]
     metrics = run_infos[0][1].keys()
     n_metrics = len(metrics)
@@ -30,13 +41,22 @@ def train_plot(runs):
     for metric, ax in zip(metrics, axes):
         ax.set_title('Evaluation {}'.format(metric))
 
+    # get col index of non unique columns (params that changes between runs)
+    all_params = pd.DataFrame([p[-1] for p in run_infos])
+    non_unique_params = all_params.apply(pd.Series.nunique) != 1
+
     for run_dir, metrics_vals, label, best_model, params in run_infos:
+        relevant_params = pd.DataFrame(params, index=[0]).loc[:, non_unique_params]
+        cols = relevant_params.columns
+        vals = map(str, relevant_params.iloc[0])
+        label = '_'.join(map(''.join, zip(cols, vals)))
+        # label = label.replace(r'model_tr-.*_vl-.*_bi', 'bi')
         for m, ax in zip(metrics, axes):
             if m in metrics_vals:
                 ax.set_title(m)
-                ax.plot(metrics_vals[m], label=label)
+                ax.plot(smooth(metrics_vals[m], s), label=label)
 
-    # plt.legend(loc='best', prop={'size': 6})
+    plt.legend(loc='best', prop={'size': 6})
     plt.tight_layout()
     plt.savefig('train_progress.pdf')
 
@@ -174,7 +194,7 @@ def main(args):
     runs = find_runs(args.run_dir)
 
     if args.type == 'train':
-        train_plot(runs)
+        train_plot(runs, args.smooth)
 
     if args.type == 'confusion':
         confusion_plot(runs)
@@ -195,5 +215,6 @@ if __name__ == '__main__':
     parser.add_argument('run_dir', nargs='?', default='runs/', help='folder in which logs are searched')
     parser.add_argument('-d', '--data', help='eval data (for confusion)')
     parser.add_argument('-o', '--output', help='outfile (for status)')
+    parser.add_argument('-s', '--smooth', default=0.0, help='exponential smooth weight')
     args = parser.parse_args()
     main(args)
