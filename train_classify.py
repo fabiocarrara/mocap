@@ -215,7 +215,8 @@ def main(args):
                         bidirectional=args.bidirectional,
                         stack=args.stack,
                         layers=args.layers,
-                        embed=args.embed)
+                        embed_layers=args.embed_layers,
+                        rel_dim=args.rel_dim)
     if args.cuda:
         model.cuda()
 
@@ -246,13 +247,22 @@ def main(args):
         # Create the run directory and log file
         train_filename = os.path.splitext(os.path.basename(args.train_data))[0]
         val_filename = os.path.splitext(os.path.basename(args.val_data))[0]
+<<<<<<< 5d11894a8914e201da67447606f9c12593e7ecd5
+=======
+
+        if train_filename.startswith('NTU'):
+            train_filename = train_filename[:6]
+        if val_filename.startswith('NTU'):
+            val_filename = val_filename[:6]
+>>>>>>> refactored pose and relations embedding
 
         parameters = vars(args)
         parameters.update(dict(train=train_filename, val=val_filename))
 
         run_name = 'model_tr-{0[train]}_vl-{0[val]}_' \
                    'bi{0[bidirectional]}_' \
-                   'emb{0[embed]}_' \
+                   'el{0[embed_layers]}_' \
+                   'rd{0[rel_dim]}_' \
                    'h{0[hd]}_' \
                    's{0[stack]}_' \
                    'l{0[layers]}_' \
@@ -340,7 +350,8 @@ if __name__ == '__main__':
     parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1, help='smooth one-hot labels by this factor')
 
     # NETWORK PARAMS
-    parser.add_argument('--emb', '--embed', dest='embed', type=int, default=48, help='sequence embedding dimensionality (0 for none)')
+    parser.add_argument('--embed-layers', '--el', type=int, default=0, help='how many layers for residual embedding of pose (0 for none)')
+    parser.add_argument('--rel-dim', '--rd', type=int, default=24, help='limb relations embedding dimension (0 for none)')
     parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional', help='use bidirectional LSTM')
     parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional', help='use unidirectional LSTM')
     parser.add_argument('--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
