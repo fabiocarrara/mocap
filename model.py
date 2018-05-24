@@ -5,28 +5,18 @@ from torch.autograd import Variable
 
 
 class MotionModel(nn.Module):
-    def __init__(self, in_size, out_size, hidden=128, dropout=0.5, bidirectional=True, stack=1, layers=1, embed=0):
+    def __init__(self, in_size, out_size, hidden=128, dropout=0.5, bidirectional=True, stack=1, layers=1,
+                 embed_layers=0, rel_dim=0):
         super(MotionModel, self).__init__()
         self.in_size = in_size
         self.bidirectional = bidirectional
         rnn_hidden = hidden // 2 if bidirectional else hidden
 
-        self.embed = None
-        if embed > 0:
-            self.embed = nn.Sequential(
-                nn.Linear(in_size, embed),
-                nn.ReLU(),
-                nn.Dropout(dropout)
-            )
-        elif embed < 0:
-            embed = - embed
-            self.embed = LimbRelations(embed)
-            embed = in_size + 10 * embed  # 10 are the possible couples between limbs
+        self.embed = SequenceEmbedding(in_size, embed_layers, rel_dim, dropout)
+        in_size = self.embed.out_size
 
-        self.lstm = nn.LSTM(embed if embed > 0 else in_size, rnn_hidden,
-                            num_layers=stack,
-                            bidirectional=bidirectional,
-                            dropout=dropout)
+        self.lstm = nn.LSTM(in_size, rnn_hidden, num_layers=stack, bidirectional=bidirectional, dropout=dropout)
+
         classifier_layers = []
         for _ in range(layers - 1):
             classifier_layers.append(nn.Linear(hidden, hidden))
@@ -75,35 +65,69 @@ class MotionModel(nn.Module):
         return last_out
 
 
-class LimbRelations(nn.Module):
-    def __init__(self, rel_size):
-        super(LimbRelations, self).__init__()
-        self.rel_size = rel_size
-        self.idx1, self.idx2 = np.triu_indices(5, 1)
+class SequenceEmbedding(nn.Module):
+    def __init__(self, in_size, embed_layers, relation_dim, dropout):
+        super(SequenceEmbedding, self).__init__()
+
+        embed_layers, relation_dim
+
+        pose_embed = []
+        for _ in range(embed_layers):
+            pose_embed.append(nn.Linear(in_size, in_size, bias=False))
+            pose_embed.append(nn.ReLU())
+            pose_embed.append(nn.Dropout(dropout))
+
+        self.embed = nn.Sequential(*pose_embed) if pose_embed else None
+
+        self.limb_size = 4 * 3  # (4 joins in a limb * 3 coordinates)
+        self.num_limb_couples = 10  # 5 * 4 / 2
+
         self.fc = nn.Sequential(
-            nn.Linear(2 * (4 * 3), rel_size),  # 2 * (4 joins per part * 3 coordinates)
-            nn.ReLU()
-        )
+            nn.Linear(2 * self.limb_size + self.num_limb_couples, relation_dim),  # 2 *  + 10 dims for one-hot
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        ) if relation_dim else None
+
+        self.idx1, self.idx2 = np.triu_indices(5, 1)
+        self.register_buffer('onehot', torch.eye(self.num_limb_couples))
+        self.out_size = (in_size + self.num_limb_couples * relation_dim  # 10 are the possible couples between limbs
+                         if relation_dim else in_size)
 
     def forward(self, x):
         """
         :param x: input shape should be (T, N), meaning Timestamp and rest (N = Flatten Joint + Coordinate)
         :return: something
         """
-        # for NTU:
-        # 0-3: central spine
-        # 4-7: left arm
-        # 8-11: right arm
-        # 12-15: left leg
-        # 16-19: right arm
-        # 20+: fingers
 
-        xx = x.view(-1, 25, 3)  # T x 25 x 3 (return to joints x coordinates)
-        limbs = xx[:, :20, :].contiguous().view(-1, 5, 12)  # T x 5 x (4x3) = T x 5 x 12 (5 limbs, 4 3D point each)
-        limb1 = limbs.unsqueeze(2).expand(-1, -1, 5, -1)  # T x 5 x 5 x 12
-        limb2 = limbs.unsqueeze(1).expand(-1, 5, -1, -1)  # T x 5 x 5 x 12
-        couples = torch.cat([limb1, limb2], -1)  # T x 5 x 5 x 24
-        unique_couples = couples[:, self.idx1, self.idx2, :]  # T x 10 x 24
-        x_rels = self.fc(unique_couples)  # T x 10 x rel_size
-        x_rels = x_rels.view(-1, 10 * self.rel_size)  # T x (10 * rel_size)
-        return torch.cat((x, x_rels), 1)  # T x (N + 10 * rel_size)
+        x = self.embed(x) + x if self.embed else x
+
+        if self.fc:
+            # for NTU:
+            # 0-3: central spine
+            # 4-7: left arm
+            # 8-11: right arm
+            # 12-15: left leg
+            # 16-19: right arm
+            # 20+: fingers
+
+            xx = x.view(-1, 25, 3)  # T x 25 x 3 (return to joints x coordinates)
+            seq_len = xx.shape[0]
+            # GET THE LIMB PARTS
+            limbs = xx[:, :20, :].contiguous().view(-1, 5, self.limb_size)  # T x 5 x limb_size (5 limbs, 4 3D point each)
+
+            # MAKE ALL POSSIBLE COMBINATIONS
+            limb1 = limbs.unsqueeze(2).expand(-1, -1, 5, -1)  # T x 5 x 5 x limb_size
+            limb2 = limbs.unsqueeze(1).expand(-1, 5, -1, -1)  # T x 5 x 5 x limb_size
+            couples = torch.cat([limb1, limb2], -1)  # T x 5 x 5 x (2 * limb_size)
+            relations = couples[:, self.idx1, self.idx2, :]  # T x 10 x (2 * limb_size)
+
+            # (OPTIONALLY) ADD ONE-HOT VECTORS TO IDENTIFY RELATIONS
+            onehot = Variable(self.onehot, requires_grad=False)
+            onehot = onehot.unsqueeze(0).expand(seq_len, -1, -1)
+            relations = torch.cat((relations, onehot), 2)  # T x 10 x (2 * limb_size + 10)
+
+            relations = self.fc(relations) if self.fc else relations  # T x 10 x rel_size
+            relations = relations.view(seq_len, -1)  # T x (10 * rel_size)
+            x = torch.cat((x, relations), 1)  # T x (N + 10 * rel_size)
+
+        return x
