@@ -144,9 +144,10 @@ def train(loader, model, optimizer, epoch, args):
             progress_bar.set_postfix({
                 'loss': '{:6.4f}'.format(avg_loss),
             })
-
-            print('Train Epoch {} [{}/{}]: Loss = {:6.4f}'.format(
-                epoch, i + 1, n_samples, avg_loss), file=args.log, flush=True)
+            
+            if (i + 1) % args.log_every == 0:        
+                print('Train Epoch {} [{}/{}]: Loss = {:6.4f}'.format(
+                    epoch, i + 1, n_samples, avg_loss), file=args.log, flush=True)
 
             avg_loss = 0
 
@@ -189,11 +190,7 @@ def main(args):
 
     train_dataset = MotionDataset(args.train_data, keep_actions=val_actions, fps=args.fps, offset=args.offset, mapper=args.mapper)
     train_actions = train_dataset.actions.keys()
-
-    # with open('a.txt', 'w') as f1, open('b.txt', 'w') as f2:
-    #     f1.write('\n'.join(map(str, train_dataset.actions.keys())))
-    #     f2.write('\n'.join(map(str, val_dataset.actions.keys())))
-
+    
     assert len(train_actions) == len(val_actions), \
         "Train and val sets should have same number of actions ({} vs {})".format(
             len(train_actions), len(val_actions))
@@ -283,7 +280,7 @@ def main(args):
 
     progress_bar = trange(start_epoch, args.epochs + 1, initial=start_epoch, disable=args.no_progress)
     for epoch in progress_bar:
-        progress_bar.set_description('TRAIN')
+        progress_bar.set_description('TRAIN [BestAcc1={:5.2f}]'.format(best_acc))
         train(train_loader, model, optimizer, epoch, args)
 
         progress_bar.set_description('EVAL')
@@ -354,6 +351,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-keep', action='store_false', dest='keep', help='keep only last and best checkpoints')
     parser.add_argument('--no-cuda', action='store_false', dest='cuda', help='disable CUDA acceleration')
     parser.add_argument('--no-progress', action='store_true', help='disable progress bars')
+    parser.add_argument('--log-every', type=int, default=None, help='how many steps between train loss logging, must be a multiple of --accumulate (default is same as --accumulate)')
     parser.add_argument('--run-dir', default='runs', help='where to place this run')
     parser.add_argument('--seed', type=int, default=42, help='random seed to reproduce runs')
     parser.add_argument('--debug', action='store_true', help='debug mode')
@@ -363,4 +361,8 @@ if __name__ == '__main__':
     parser.set_defaults(debug=False)
     parser.set_defaults(keep=False)
     args = parser.parse_args()
+    
+    if args.log_every is None:
+        args.log_every = args.accumulate
+        
     main(args)
