@@ -239,11 +239,11 @@ def main(args):
         best_acc = 0
         start_epoch = 1
         # Create the run directory and log file
-        train_fname = os.path.splitext(os.path.basename(args.train_data))[0]
-        val_fname = os.path.splitext(os.path.basename(args.val_data))[0]
+        train_filename = os.path.splitext(os.path.basename(args.train_data))[0]
+        val_filename = os.path.splitext(os.path.basename(args.val_data))[0]
 
         parameters = vars(args)
-        parameters.update(dict(train=train_fname, val=val_fname))
+        parameters.update(dict(train=train_filename, val=val_filename))
 
         run_name = 'model_tr-{0[train]}_vl-{0[val]}_' \
                    'bi{0[bidirectional]}_' \
@@ -272,8 +272,8 @@ def main(args):
             return
 
         params = pd.DataFrame(parameters, index=[0])  # an index is mandatory for a single line
-        params_fname = os.path.join(run_dir, 'params.csv')
-        params.to_csv(params_fname, index=False)
+        params_filename = os.path.join(run_dir, 'params.csv')
+        params.to_csv(params_filename, index=False)
 
         with pd.option_context('display.width', None), pd.option_context('max_columns', None):
             print(params)
@@ -298,17 +298,17 @@ def main(args):
 
         # SAVE MODEL
         if args.keep:
-            fname = 'epoch_{:02d}.pth'.format(epoch)
+            ckeckpoint_filename = 'epoch_{:02d}.pth'.format(epoch)
         else:
-            fname = 'last_checkpoint.pth'
+            ckeckpoint_filename = 'last_checkpoint.pth'
 
-        fname = os.path.join(run_dir, fname)
+        ckeckpoint_filename = os.path.join(run_dir, ckeckpoint_filename)
         save_checkpoint({
             'epoch': epoch,
             'best_accuracy': best_acc,
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-        }, is_best, fname)
+        }, is_best, ckeckpoint_filename)
 
         if args.balance == 'adaptive':
             # print(accuracy_balance)
