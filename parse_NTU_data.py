@@ -73,8 +73,7 @@ def main(args):
     sequences = get_sequences(args.data)
     parsed = (parse_sequence(seq) for seq in sequences)
 
-    actions_to_exclude = (50, 51, 52, 53, 54, 55, 56, 57, 59, 60)
-    parsed = filter(lambda x: x['action'] not in actions_to_exclude, parsed)
+    parsed = filter(lambda x: x['action'] < 50, parsed)
 
     if args.scenario == 'cross-view':
         is_train = lambda x: x['camera'] >= 2
