@@ -295,17 +295,17 @@ def main(args):
 
         # SAVE MODEL
         if args.keep:
-            ckeckpoint_filename = 'epoch_{:02d}.pth'.format(epoch)
+            checkpoint_filename = 'epoch_{:02d}.pth'.format(epoch)
         else:
-            ckeckpoint_filename = 'last_checkpoint.pth'
+            checkpoint_filename = 'last_checkpoint.pth'
 
-        ckeckpoint_filename = os.path.join(run_dir, ckeckpoint_filename)
+            checkpoint_filename = os.path.join(run_dir, checkpoint_filename)
         save_checkpoint({
             'epoch': epoch,
             'best_accuracy': best_acc,
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict(),
-        }, is_best, ckeckpoint_filename)
+        }, is_best, checkpoint_filename)
 
         if args.balance == 'adaptive':
             # print(accuracy_balance)
