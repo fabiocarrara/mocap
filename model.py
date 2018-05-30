@@ -6,7 +6,7 @@ from torch.autograd import Variable
 
 class MotionModel(nn.Module):
     def __init__(self, in_size, out_size, hidden=128, dropout=0.5, bidirectional=True, stack=1, layers=1,
-                 embed_layers=0, rel_dim=0):
+                 embed_layers=0, rel_dim=0, **kwargs):
         super(MotionModel, self).__init__()
         self.in_size = in_size
         self.bidirectional = bidirectional

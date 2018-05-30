@@ -1,3 +1,5 @@
+import glob
+
 import glob2
 import os
 import numpy as np
@@ -9,7 +11,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset import NTUMotionDataset as MotionDataset
+from dataset_ntu import MotionDataset
 from model import MotionModel
 
 
@@ -64,8 +66,8 @@ def load_run(run, data=None, **data_kwargs):
         if params['mapper']:
             data_kwargs['mapper'] = params['mapper']
 
-        train_dataset = MotionDataset(params['train_data'], fps=params.get('fps', 120), **data_kwargs)
-        val_dataset = MotionDataset(params['val_data'], fps=params.get('fps', 120), **data_kwargs)
+        train_dataset = MotionDataset(params['train_data'], fps=params.get('fps', 30), **data_kwargs)
+        val_dataset = MotionDataset(params['val_data'], fps=params.get('fps', 30), **data_kwargs)
         train_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
         val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
 
@@ -73,18 +75,11 @@ def load_run(run, data=None, **data_kwargs):
         in_size, out_size = val_dataset.get_data_size()
 
     else:
-        dataset = MotionDataset(data, fps=params.get('fps', 120), **data_kwargs)
+        dataset = MotionDataset(data, fps=params.get('fps', 30), **data_kwargs)
         loader = DataLoader(dataset, batch_size=1, shuffle=False)
         in_size, out_size = dataset.get_data_size()
 
-    model = MotionModel(in_size, out_size,
-                        hidden=params.get('hd', 512),
-                        dropout=params.get('dropout', 0),
-                        bidirectional=params.get('bidirectional', False),
-                        stack=params.get('stack', 1),
-                        layers=params.get('layers', 2),
-                        embed=params.get('embed', 64)
-                        )
+    model = MotionModel(in_size, out_size, **params)
     if params['cuda']:
         model.cuda()
     checkpoint = torch.load(best_model)
@@ -158,6 +153,48 @@ def get_predictions(run, train=False, stream=False, force=False):
     return targets, predictions, annot_time
 
 
+def get_classifications(run, train=False, force=False):
+
+    # Compute and cache predictions
+    classifications_file = 'classifications_train.npz' if train else 'classifications.npz'
+    annot_time = None
+    if os.path.exists(classifications_file) and not force:
+        print('Loading cached classifications:', classifications_file)
+        a = np.load(classifications_file)
+        targets = a['targets']
+        predictions = a['predictions']
+        annot_time = a['annot_time'] if 'annot_time' in a else None
+        del a
+    else:
+        run_info, model, loaders = load_run(run)
+        params = run_info[-1]
+        loader = loaders[0] if train else loaders[1]
+
+        targets = []
+        predictions = []
+
+        start = time.time()
+        for i, (x, y) in enumerate(tqdm(loader)):
+            y = y.numpy().squeeze()
+            targets.append(y)
+            if params['cuda']:
+                x = x.cuda()
+
+            x = Variable(x, volatile=True)
+
+            logits = model(x).squeeze()
+            _, y_hat = torch.max(logits, 0)
+
+            y_hat = y_hat.data.cpu().numpy().squeeze()
+            predictions.append(y_hat)
+        end = time.time()
+
+        annot_time = end - start
+        np.savez_compressed(classifications_file, targets=targets, predictions=predictions, annot_time=annot_time)
+
+    return targets, predictions, annot_time
+
+
 def get_run_summary(info, epoch='all', aggr=max, **kwargs):
     run_dir, metrics, label, best_model, params = info
 
@@ -199,3 +236,19 @@ def get_run_summary(info, epoch='all', aggr=max, **kwargs):
         )
 
     return params
+
+
+def get_last_checkpoint(run_dir):
+    last_checkpoint = os.path.join(run_dir, 'last_checkpoint.pth')
+    if os.path.exists(last_checkpoint):
+        return last_checkpoint
+
+    def get_epoch(fname):
+        epoch_regex = r'.*epoch_(\d+).pth'
+        matches = re.match(epoch_regex, fname)
+        return int(matches.groups()[0]) if matches else None
+
+    checkpoints = glob.glob(os.path.join(run_dir, 'epoch_*.pth'))
+    checkpoints = [(get_epoch(i), i) for i in checkpoints]
+    last_checkpoint = max(checkpoints)[1]
+    return last_checkpoint
