@@ -1,10 +1,8 @@
 import argparse
-import glob
-
 import os
-import pandas as pd
-import re
 import shutil
+
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -14,8 +12,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data.sampler import WeightedRandomSampler, RandomSampler
 from tqdm import trange, tqdm
 
-from dataset import NTUMotionDataset as MotionDataset
+from dataset_ntu import MotionDataset, NoisyDataset
 from model import MotionModel
+from utils import get_last_checkpoint
 
 
 def accuracy(output, target, topk=(1, 5)):
@@ -160,22 +159,6 @@ def save_checkpoint(state, is_best, filename):
         shutil.copyfile(filename, best_filename)
 
 
-def get_last_checkpoint(run_dir):
-    last_checkpoint = os.path.join(run_dir, 'last_checkpoint.pth')
-    if os.path.exists(last_checkpoint):
-        return last_checkpoint
-
-    def get_epoch(fname):
-        epoch_regex = r'.*epoch_(\d+).pth'
-        matches = re.match(epoch_regex, fname)
-        return int(matches.groups()[0]) if matches else None
-
-    checkpoints = glob.glob(os.path.join(run_dir, 'epoch_*.pth'))
-    checkpoints = [(get_epoch(i), i) for i in checkpoints]
-    last_checkpoint = max(checkpoints)[1]
-    return last_checkpoint
-
-
 def main(args):
     # Use CUDA?
     args.cuda = args.cuda and torch.cuda.is_available()
@@ -189,6 +172,9 @@ def main(args):
     # for NTU
     train_dataset = MotionDataset(args.train_data, fps=args.fps, offset=args.offset)
     train_actions = train_dataset.actions.keys()
+    
+    if args.noise_start or args.noise_end:
+        train_dataset = NoisyDataset(train_dataset, noise_start=args.noise_start, noise_end=args.noise_end, noise_epochs=args.epochs)
     
     val_dataset = MotionDataset(args.val_data, fps=args.fps)
     val_actions = val_dataset.actions.keys()
@@ -210,7 +196,7 @@ def main(args):
 
     # Build the model
     model = MotionModel(in_size, out_size,
-                        hidden=args.hd,
+                        hidden=args.hidden,
                         dropout=args.dropout,
                         bidirectional=args.bidirectional,
                         stack=args.stack,
@@ -247,14 +233,11 @@ def main(args):
         # Create the run directory and log file
         train_filename = os.path.splitext(os.path.basename(args.train_data))[0]
         val_filename = os.path.splitext(os.path.basename(args.val_data))[0]
-<<<<<<< 5d11894a8914e201da67447606f9c12593e7ecd5
-=======
 
         if train_filename.startswith('NTU'):
             train_filename = train_filename[:6]
         if val_filename.startswith('NTU'):
             val_filename = val_filename[:6]
->>>>>>> refactored pose and relations embedding
 
         parameters = vars(args)
         parameters.update(dict(train=train_filename, val=val_filename))
@@ -275,6 +258,7 @@ def main(args):
                    'wd{0[wd]}_' \
                    'e{0[epochs]}_' \
                    'f{0[fps]}_' \
+                   'n{0[noise_start]}-{0[noise_end]}_' \
                    'o-{0[offset]}_' \
                    'opt-{0[optim]}_' \
                    'ls{0[label_smoothing]}_' \
@@ -330,6 +314,10 @@ def main(args):
             # 'scheduler': scheduler.state_dict() if scheduler else None
         }, is_best, checkpoint_filename)
 
+        # increment the injected noise in the dataset
+        if args.noise_start or args.noise_end:
+            train_dataset.step()
+
         if args.balance == 'adaptive':
             # print(accuracy_balance)
             weights = train_dataset.get_weights(accuracy_balance)
@@ -348,13 +336,15 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--offset', choices=['none', 'random'], default='random', help='offset mode when resampling training data')
     parser.add_argument('--balance', choices=['none', 'frequency', 'adaptive'], default='none', help='how to sample during training')
     parser.add_argument('--ls', '--label-smoothing', type=float, dest='label_smoothing', default=0.1, help='smooth one-hot labels by this factor')
+    parser.add_argument('-ns', '--noise-start', type=int, default=0, help='base ten exponent for initial noise augmentation (both 0 for none)')
+    parser.add_argument('-ne', '--noise-end', type=int, default=0, help='base ten exponent for final noise augmentation (both 0 for none)')
 
     # NETWORK PARAMS
     parser.add_argument('--embed-layers', '--el', type=int, default=0, help='how many layers for residual embedding of pose (0 for none)')
     parser.add_argument('--rel-dim', '--rd', type=int, default=24, help='limb relations embedding dimension (0 for none)')
     parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional', help='use bidirectional LSTM')
     parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional', help='use unidirectional LSTM')
-    parser.add_argument('--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
+    parser.add_argument('--hidden', '--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
     parser.add_argument('-s', '--stack', type=int, default=1, help='how many LSTMs to stack')
     parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
     parser.add_argument('-d', '--dropout', type=float, default=0.5, help='dropout applied on hidden state')

@@ -27,7 +27,7 @@ class MotionDataset(Dataset):
         self.n_actions = len(self.actions)
 
         print('Loaded: {} (Samples: {})'.format(data_file, len(self.data)))
-        # pprint(self.actions)
+        # pprint(self.actions)        
 
     def __len__(self):
         if self.offset == 'all':
@@ -59,6 +59,30 @@ class MotionDataset(Dataset):
         out_size = len(self.actions)
         return in_size, out_size
 
+
+class NoisyDataset(Dataset):
+    def __init__(self, dataset, noise_start=0, noise_end=0, noise_epochs=0):
+        self.dataset = dataset
+        self.noise_std = torch.logspace(noise_start, noise_end, noise_epochs)
+        self.epoch = 0
+
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, index):
+        x, y = self.dataset[index]
+        noise = x.new(*x.shape).normal_(0, self.noise_std[self.epoch])
+        return x + noise, y
+    
+    def get_data_size(self):
+        return self.dataset.get_data_size()
+    
+    def step(self):
+        self.epoch += 1
+    
+    def set_epoch(self, e):
+        self.epoch = e
+        
 
 if __name__ == '__main__':
     dataset = MotionDataset('data/NTU/NTU-CS-objects-annotations_filtered0.9GT-coords_normPOS-train.pkl')
