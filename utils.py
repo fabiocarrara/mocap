@@ -157,6 +157,7 @@ def get_classifications(run, train=False, force=False):
 
     # Compute and cache predictions
     classifications_file = 'classifications_train.npz' if train else 'classifications.npz'
+    classifications_file = os.path.join(run, classifications_file)
     annot_time = None
     if os.path.exists(classifications_file) and not force:
         print('Loading cached classifications:', classifications_file)
