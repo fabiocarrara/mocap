@@ -6,7 +6,7 @@ from torch.autograd import Variable
 
 class MotionModel(nn.Module):
     def __init__(self, in_size, out_size, hidden=128, dropout=0.5, bidirectional=True, stack=1, layers=1,
-                 embed_layers=0, rel_dim=0, velocity=False, **kwargs):
+                 embed_layers=0, velocity=False, **kwargs):
         super(MotionModel, self).__init__()
         self.in_size = in_size
         self.bidirectional = bidirectional
@@ -15,8 +15,7 @@ class MotionModel(nn.Module):
         rnn_hidden = hidden // 2 if bidirectional else hidden
         rnn_hidden = rnn_hidden // 2 if velocity else rnn_hidden
 
-        self.embed = SequenceEmbedding(in_size, embed_layers, rel_dim, dropout)
-        in_size = self.embed.out_size
+        self.embed = Residual(in_size, embed_layers) if embed_layers else None
 
         self.lstm = nn.LSTM(in_size, rnn_hidden, num_layers=stack, bidirectional=bidirectional, dropout=dropout)
         if velocity:
@@ -151,4 +150,37 @@ class SequenceEmbedding(nn.Module):
             relations = relations.view(seq_len, -1)  # T x (10 * rel_size)
             x = torch.cat((x, relations), 1)  # T x (N + 10 * rel_size)
 
+        return x
+
+
+class ResBlock(nn.Module):
+    def __init__(self, in_size):
+        super(ResBlock, self).__init__()
+
+        kernel_sizes = (1, 3, 5)
+
+        self.convs = nn.ModuleList([nn.Sequential(
+            nn.Conv1d(in_size, in_size, kernel_size=k, padding=(k - 1) // 2),
+            nn.ReLU(),
+            nn.Conv1d(in_size, in_size, kernel_size=k, padding=(k - 1) // 2)
+        ) for k in kernel_sizes])
+
+    def forward(self, x):  # x should have shape: 1 x 75 x T
+        xx = [c(x) for c in self.convs]  # apply all convs
+        xx.append(x)  # add the input
+        xx = torch.cat(xx).sum(0, keepdim=True)  # sum together inputs and all convs
+        return xx
+
+
+class Residual(nn.Module):
+    def __init__(self, in_size, n_blocks):
+        super(Residual, self).__init__()
+
+        self.blocks = [ResBlock(in_size) for _ in range(n_blocks)]
+        self.blocks = nn.Sequential(*self.blocks)
+
+    def forward(self, x):  # x should have shape: T x 75
+        x = x.transpose(0, 1).unsqueeze(0)  # 1 x 75 x T
+        x = self.blocks(x)  # still 1 x 75 x T
+        x = x.squeeze().transpose(0, 1)  # back to T x 75
         return x
