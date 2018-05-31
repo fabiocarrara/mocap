@@ -34,6 +34,7 @@ class MotionModel(nn.Module):
     def forward(self, input):
         outputs, hidden = self.forward_lstm(input)
         last_out = outputs[-1]  # this is the last hidden state (last timestep) of the last stacked layer
+
         return self.classifier(last_out)
 
     def segment(self, input):
@@ -69,8 +70,6 @@ class SequenceEmbedding(nn.Module):
     def __init__(self, in_size, embed_layers, relation_dim, dropout):
         super(SequenceEmbedding, self).__init__()
 
-        embed_layers, relation_dim
-
         pose_embed = []
         for _ in range(embed_layers):
             pose_embed.append(nn.Linear(in_size, in_size, bias=False))
@@ -79,18 +78,19 @@ class SequenceEmbedding(nn.Module):
 
         self.embed = nn.Sequential(*pose_embed) if pose_embed else None
 
-        self.limb_size = 4 * 3  # (4 joins in a limb * 3 coordinates)
-        self.num_limb_couples = 10  # 5 * 4 / 2
+        self.limb_dim = 4 * 3  # (4 joins in a limb * 3 coordinates)
+        self.n_limbs = 6
+        self.n_limb_couples = self.n_limbs * (self.n_limbs - 1) // 2
 
         self.fc = nn.Sequential(
-            nn.Linear(2 * self.limb_size + self.num_limb_couples, relation_dim),  # 2 *  + 10 dims for one-hot
+            nn.Linear(2 * self.limb_dim + self.n_limb_couples, relation_dim),  # 2 * 12 + 15 dims for one-hot
             nn.ReLU(),
             nn.Dropout(dropout)
         ) if relation_dim else None
 
-        self.idx1, self.idx2 = np.triu_indices(5, 1)
-        self.register_buffer('onehot', torch.eye(self.num_limb_couples))
-        self.out_size = (in_size + self.num_limb_couples * relation_dim  # 10 are the possible couples between limbs
+        self.idx1, self.idx2 = np.triu_indices(self.n_limbs, 1)
+        self.register_buffer('onehot', torch.eye(self.n_limb_couples))
+        self.out_size = ((in_size + self.n_limb_couples * relation_dim)  # 15 are the possible couples between limbs
                          if relation_dim else in_size)
 
     def forward(self, x):
@@ -108,17 +108,21 @@ class SequenceEmbedding(nn.Module):
             # 8-11: right arm
             # 12-15: left leg
             # 16-19: right arm
-            # 20+: fingers
+            # 20: chest
+            # 21-24: fingers
+
+            # all but chest
+            limb_idx = [i for i in range(25) if i != 20]
 
             xx = x.view(-1, 25, 3)  # T x 25 x 3 (return to joints x coordinates)
             seq_len = xx.shape[0]
             # GET THE LIMB PARTS
-            limbs = xx[:, :20, :].contiguous().view(-1, 5, self.limb_size)  # T x 5 x limb_size (5 limbs, 4 3D point each)
+            limbs = xx[:, limb_idx, :].contiguous().view(-1, self.n_limbs, self.limb_dim)  # T x 6 x limb_size (6 limbs, 4 3D point each)
 
             # MAKE ALL POSSIBLE COMBINATIONS
-            limb1 = limbs.unsqueeze(2).expand(-1, -1, 5, -1)  # T x 5 x 5 x limb_size
-            limb2 = limbs.unsqueeze(1).expand(-1, 5, -1, -1)  # T x 5 x 5 x limb_size
-            couples = torch.cat([limb1, limb2], -1)  # T x 5 x 5 x (2 * limb_size)
+            limb1 = limbs.unsqueeze(2).expand(-1, -1, self.n_limbs, -1)  # T x 6 x 6 x limb_size
+            limb2 = limbs.unsqueeze(1).expand(-1, self.n_limbs, -1, -1)  # T x 6 x 6 x limb_size
+            couples = torch.cat([limb1, limb2], -1)  # T x 6 x 6 x (2 * limb_size)
             relations = couples[:, self.idx1, self.idx2, :]  # T x 10 x (2 * limb_size)
 
             # (OPTIONALLY) ADD ONE-HOT VECTORS TO IDENTIFY RELATIONS
