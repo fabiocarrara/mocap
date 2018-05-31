@@ -246,7 +246,7 @@ def main(args):
                    'bi{0[bidirectional]}_' \
                    'el{0[embed_layers]}_' \
                    'rd{0[rel_dim]}_' \
-                   'h{0[hd]}_' \
+                   'h{0[hidden]}_' \
                    's{0[stack]}_' \
                    'l{0[layers]}_' \
                    '{0[head]}_' \
