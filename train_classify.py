@@ -202,9 +202,15 @@ def main(args):
                         stack=args.stack,
                         layers=args.layers,
                         embed_layers=args.embed_layers,
-                        rel_dim=args.rel_dim)
+                        rel_dim=args.rel_dim,
+                        velocity=args.velocity)
     if args.cuda:
         model.cuda()
+
+    if args.pretrain:
+        checkpoint = torch.load(args.pretrain)
+        model.load_state_dict(checkpoint['state_dict'])
+        print('Loading pre-trained weights:', args.pretrain)
 
     # Create the optimizer and start training-eval loop
     if args.optim == 'adam':
@@ -215,6 +221,8 @@ def main(args):
     scheduler = None
     if args.lr_scheduler == 'cosine':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 5, args.lr / 10**3)
+    elif args.lr_scheduler == 'plateau':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True)
 
     # Resume training?
     if args.resume:
@@ -240,7 +248,9 @@ def main(args):
             val_filename = val_filename[:6]
 
         parameters = vars(args)
-        parameters.update(dict(train=train_filename, val=val_filename))
+        parameters.update(dict(train=train_filename,
+                               val=val_filename,
+                               pretrained='_pretrained' if args.pretrain else ''))
 
         run_name = 'model_tr-{0[train]}_vl-{0[val]}_' \
                    'bi{0[bidirectional]}_' \
@@ -260,9 +270,10 @@ def main(args):
                    'f{0[fps]}_' \
                    'n{0[noise_start]}-{0[noise_end]}_' \
                    'o-{0[offset]}_' \
+                   'vel{0[velocity]}_' \
                    'opt-{0[optim]}_' \
                    'ls{0[label_smoothing]}_' \
-                   'bal-{0[balance]}'.format(parameters)
+                   'bal-{0[balance]}{0[pretrained]}'.format(parameters)
 
         runs_parent_dir = 'debug' if args.debug else args.run_dir
         run_dir = os.path.join(runs_parent_dir, run_name)
@@ -283,8 +294,6 @@ def main(args):
 
     progress_bar = trange(start_epoch, args.epochs + 1, initial=start_epoch, disable=args.no_progress)
     for epoch in progress_bar:
-        if scheduler:
-            scheduler.step()
 
         progress_bar.set_description('TRAIN [BestAcc1={:5.2f}]'.format(best_acc))
         train(train_loader, model, optimizer, epoch, args)
@@ -293,6 +302,9 @@ def main(args):
         metrics, accuracy_balance = evaluate(val_loader, model, args)
         print('Eval Epoch {}: Loss={:6.4f} Acc@1={:5.2f} Acc@5={:5.2f}'.format(epoch, *metrics),
               file=args.log, flush=True)
+
+        if scheduler:
+            scheduler.step(metrics[0])
 
         current_acc1 = metrics[1]
 
@@ -342,6 +354,7 @@ if __name__ == '__main__':
     # NETWORK PARAMS
     parser.add_argument('--embed-layers', '--el', type=int, default=0, help='how many layers for residual embedding of pose (0 for none)')
     parser.add_argument('--rel-dim', '--rd', type=int, default=24, help='limb relations embedding dimension (0 for none)')
+    parser.add_argument('-v', '--velocity', action='store_true', help='add velocity branch')
     parser.add_argument('-b', '--bidirectional', action='store_true', dest='bidirectional', help='use bidirectional LSTM')
     parser.add_argument('-u', '--unidirectional', action='store_false', dest='bidirectional', help='use unidirectional LSTM')
     parser.add_argument('--hidden', '--hd', '--hidden-dim', type=int, default=1024, help='LSTM hidden state dimension')
@@ -349,6 +362,7 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--layers', type=int, default=1, help='how many layers for fully connected classifier')
     parser.add_argument('-d', '--dropout', type=float, default=0.5, help='dropout applied on hidden state')
     parser.add_argument('--head', choices=['softmax', 'sigmoid'], default='softmax', help='networks head')
+    parser.add_argument('-p', '--pretrain', help='path to initial pre-trained snapshot')
 
     # OPTIMIZER PARAMS
     parser.add_argument('--optim', choices=['sgd', 'adam'], default='adam', help='optimizer')
@@ -357,7 +371,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--clip-norm', type=float, default=0.0, help='max gradient norm (0 for no clipping)')
     parser.add_argument('-e', '--epochs', type=int, default=150, help='number of training epochs')
     parser.add_argument('--lr', '--learning-rate', type=float, default=0.0005, help='learning rate')
-    parser.add_argument('--lr-scheduler', '--sched', choices=['none', 'cosine'], default='none', help='learning rate schedule')
+    parser.add_argument('--lr-scheduler', '--sched', choices=['none', 'cosine', 'plateau'], default='none', help='learning rate schedule')
     parser.add_argument('--wd', '--weight-decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('-r', '--resume', help='run dir to resume training from')
 
@@ -375,6 +389,7 @@ if __name__ == '__main__':
     parser.set_defaults(cuda=True)
     parser.set_defaults(debug=False)
     parser.set_defaults(keep=False)
+    parser.set_defaults(velocity=False)
     args = parser.parse_args()
     
     if args.log_every is None:
