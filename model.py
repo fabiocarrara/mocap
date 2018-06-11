@@ -6,16 +6,22 @@ from torch.autograd import Variable
 
 class MotionModel(nn.Module):
     def __init__(self, in_size, out_size, hidden=128, dropout=0.5, bidirectional=True, stack=1, layers=1,
-                 embed_layers=0, rel_dim=0, **kwargs):
+                 embed_layers=0, rel_dim=0, velocity=False, **kwargs):
         super(MotionModel, self).__init__()
         self.in_size = in_size
         self.bidirectional = bidirectional
+        self.velocity = velocity
+
         rnn_hidden = hidden // 2 if bidirectional else hidden
+        rnn_hidden = rnn_hidden // 2 if velocity else rnn_hidden
 
         self.embed = SequenceEmbedding(in_size, embed_layers, rel_dim, dropout)
         in_size = self.embed.out_size
 
         self.lstm = nn.LSTM(in_size, rnn_hidden, num_layers=stack, bidirectional=bidirectional, dropout=dropout)
+        if velocity:
+            self.velocity_lstm = nn.LSTM(in_size, rnn_hidden, num_layers=stack, bidirectional=bidirectional,
+                                         dropout=dropout)
 
         classifier_layers = []
         for _ in range(layers - 1):
@@ -29,7 +35,18 @@ class MotionModel(nn.Module):
         input = input.view(-1, self.in_size)  # seq, data
         input = self.embed(input) if self.embed is not None else input  # embed all data in the sequence
         input = input.unsqueeze(1)  # seq, batch, data
-        return self.lstm(input)
+        output, hidden = self.lstm(input)
+
+        if self.velocity:
+            velocity = input[1:] - input[:-1]
+            velocity = torch.cat((velocity, velocity[-1:]), 0)
+            velocity_output, velocity_hidden = self.velocity_lstm(velocity)
+
+            output = torch.cat((output, velocity_output), 2)  # concat along features dimension
+            hidden = (torch.cat((hidden[0], velocity_hidden[0]), 2),
+                      torch.cat((hidden[1], velocity_hidden[1]), 2))
+
+        return output, hidden
 
     def forward(self, input):
         outputs, hidden = self.forward_lstm(input)
