@@ -142,7 +142,13 @@ def display_status(runs):
     else:
         with pd.option_context('display.width', None), \
              pd.option_context('max_columns', None):
-            print(summary)
+
+            # get col index of non unique columns (params that changes between runs)
+            unique_cols = summary.apply(pd.Series.nunique) == 1
+            non_unique_cols = summary.apply(pd.Series.nunique) != 1
+            print(summary.loc[:, non_unique_cols])
+            print("Common params:")
+            print(summary.loc[0, unique_cols])
 
 
 def offset_eval(runs):
@@ -193,14 +199,12 @@ def ablation(runs):
 def main(args):
     runs = find_runs(args.run_dir)
 
-    if args.type == 'train':
-        train_plot(runs, args.smooth)
-
     if args.type == 'confusion':
         confusion_plot(runs)
 
     if args.type == 'status':
         display_status(runs)
+        train_plot(runs, args.smooth)
 
     if args.type == 'multi-eval':
         offset_eval(runs)
@@ -211,7 +215,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Show misc info about runs')
-    parser.add_argument('type', choices=['train', 'confusion', 'status', 'multi-eval', 'ablation'], help='what to plot')
+    parser.add_argument('type', choices=['confusion', 'status', 'multi-eval', 'ablation'], help='what to plot')
     parser.add_argument('run_dir', nargs='?', default='runs/', help='folder in which logs are searched')
     parser.add_argument('-d', '--data', help='eval data (for confusion)')
     parser.add_argument('-o', '--output', help='outfile (for status)')
