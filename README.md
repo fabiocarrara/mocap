@@ -16,7 +16,7 @@ The above videos show two sequences of this kind. The prediction of our model is
 
 ## How to reproduce
 
-1. Download the proprocessed data archive and extract it in the repo root folder: [hdm05-mocap-data.tar.gz](https://drive.google.com/file/d/1YyQTS2vyK0Z6MdeTd9ko9K3u_E6G8i5c/view?usp=sharing) (~1GB, the original HDM05 dataset is available [here](http://resources.mpi-inf.mpg.de/HDM05/))
+1. Download the proprocessed data archive and extract it in the repo root folder: [hdm05-mocap-data.tar.gz](https://github.com/fabiocarrara/mocap/releases/download/hdm05/hdm05-mocap-data.tar.gz) (~1GB, the original HDM05 dataset is available [here](http://resources.mpi-inf.mpg.de/HDM05/))
 
 2. Run `parse_HDM05_data.sh` to generate data splits.
 
